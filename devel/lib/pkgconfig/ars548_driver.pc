@@ -1,0 +1,8 @@
+prefix=/home/mvclab/workspace/ncsist/ars548_RoboStack/devel
+
+Name: ars548_driver
+Description: Description of ars548_driver
+Version: 0.1.0
+Cflags: -I/home/mvclab/workspace/ncsist/ars548_RoboStack/src/ars548_ros-noetic/ars548_driver/include
+Libs: -L${prefix}/lib 
+Requires: ars548_messages

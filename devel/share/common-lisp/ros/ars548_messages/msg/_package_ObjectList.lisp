@@ -1,0 +1,26 @@
+(cl:in-package ars548_messages-msg)
+(cl:export '(HEADER-VAL
+          HEADER
+          CRC-VAL
+          CRC
+          LENGTH-VAL
+          LENGTH
+          SQC-VAL
+          SQC
+          DATAID-VAL
+          DATAID
+          TIMESTAMP_NANOSECONDS-VAL
+          TIMESTAMP_NANOSECONDS
+          TIMESTAMP_SECONDS-VAL
+          TIMESTAMP_SECONDS
+          TIMESTAMP_SYNCSTATUS-VAL
+          TIMESTAMP_SYNCSTATUS
+          EVENTDATAQUALIFIER-VAL
+          EVENTDATAQUALIFIER
+          EXTENDEDQUALIFIER-VAL
+          EXTENDEDQUALIFIER
+          OBJECTLIST_NUMOFOBJECTS-VAL
+          OBJECTLIST_NUMOFOBJECTS
+          OBJECTLIST_OBJECTS-VAL
+          OBJECTLIST_OBJECTS
+))

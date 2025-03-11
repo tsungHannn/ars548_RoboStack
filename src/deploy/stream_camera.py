@@ -69,8 +69,9 @@ class SpinnakerCameraNode:
             #rospy.loginfo(f'Image: {frame_id} {timestamp}')
             
             # Convert OpenCV image to ROS image message
+            ros_image = self.bridge.cv2_to_imgmsg(np_array, '8UC3')
             try:
-                ros_image = self.bridge.cv2_to_imgmsg(np_array, '8UC3')
+                # ros_image = self.bridge.cv2_to_imgmsg(np_array, '8UC3')
                 ros_image.header.stamp = ros_timestamp
 
                 self.compressed_image_pub.publish(self.bridge.cv2_to_compressed_imgmsg(np_array))

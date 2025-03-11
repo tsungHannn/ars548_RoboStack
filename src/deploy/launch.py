@@ -12,7 +12,7 @@ commands = [
 
 stream = [('stream_camera', 'python stream_camera.py'), ('stream_radar', 'rosrun ars548_driver ars548_driver')]
 control = ('control', 'python projector.py')
-bag = ('rosbag', 'rosbag play /home/ncsist/bags/B_place/5_2025-02-26-10-42-16.bag -l --clock -u 6')
+bag = ('rosbag', 'rosbag play /media/mvclab/HDD/ncsist/2025/data/B_place/1_2025-02-26-10-36-45.bag -l --clock -u 6')
 
 def start_tmux_session(args):
     if args.bag:

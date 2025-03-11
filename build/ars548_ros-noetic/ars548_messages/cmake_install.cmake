@@ -81,7 +81,7 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  execute_process(COMMAND "/home/mvclab/micromamba/envs/ros_env/bin/python3.11" -m compileall "/home/mvclab/workspace/ncsist/ars548_RoboStack/devel/lib/python3.11/site-packages/ars548_messages")
+  execute_process(COMMAND "/home/mvclab/micromamba/envs/ros/bin/python3.11" -m compileall "/home/mvclab/workspace/ncsist/ars548_RoboStack/devel/lib/python3.11/site-packages/ars548_messages")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)

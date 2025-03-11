@@ -142,7 +142,11 @@ class TrafficMonitor():
         if not len(dets[0].boxes.xywh.cpu()):
             return [], [], image
         boxes = dets[0].boxes.xywh.cpu()
-        track_ids = dets[0].boxes.id.int().tolist()
+        track_ids = dets[0].boxes.id
+        if track_ids is None:
+            track_ids = []
+        else:
+            track_ids = dets[0].boxes.id.int().tolist()
         annotated_frame = dets[0].plot()
         for box, track_id in zip(boxes, track_ids):
             x, y, w, h = box

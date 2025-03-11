@@ -44,10 +44,10 @@ cmake_force:
 SHELL = /bin/sh
 
 # The CMake executable.
-CMAKE_COMMAND = /home/mvclab/micromamba/envs/ros_env/bin/cmake
+CMAKE_COMMAND = /home/mvclab/micromamba/envs/ros/bin/cmake
 
 # The command to remove a file.
-RM = /home/mvclab/micromamba/envs/ros_env/bin/cmake -E rm -f
+RM = /home/mvclab/micromamba/envs/ros/bin/cmake -E rm -f
 
 # Escaping for special characters.
 EQUALS = =

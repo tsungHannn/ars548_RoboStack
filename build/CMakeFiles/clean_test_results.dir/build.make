@@ -44,10 +44,10 @@ cmake_force:
 SHELL = /bin/sh
 
 # The CMake executable.
-CMAKE_COMMAND = /home/mvclab/micromamba/envs/ros_env/bin/cmake
+CMAKE_COMMAND = /home/mvclab/micromamba/envs/ros/bin/cmake
 
 # The command to remove a file.
-RM = /home/mvclab/micromamba/envs/ros_env/bin/cmake -E rm -f
+RM = /home/mvclab/micromamba/envs/ros/bin/cmake -E rm -f
 
 # Escaping for special characters.
 EQUALS = =
@@ -67,7 +67,7 @@ include CMakeFiles/clean_test_results.dir/compiler_depend.make
 include CMakeFiles/clean_test_results.dir/progress.make
 
 CMakeFiles/clean_test_results:
-	/home/mvclab/micromamba/envs/ros_env/bin/python3.11 /home/mvclab/micromamba/envs/ros_env/share/catkin/cmake/test/remove_test_results.py /home/mvclab/workspace/ncsist/ars548_RoboStack/build/test_results
+	/home/mvclab/micromamba/envs/ros/bin/python3.11 /home/mvclab/micromamba/envs/ros/share/catkin/cmake/test/remove_test_results.py /home/mvclab/workspace/ncsist/ars548_RoboStack/build/test_results
 
 CMakeFiles/clean_test_results.dir/codegen:
 .PHONY : CMakeFiles/clean_test_results.dir/codegen

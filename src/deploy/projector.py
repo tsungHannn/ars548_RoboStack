@@ -3,12 +3,12 @@ import numpy as np
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                            QWidget, QPushButton, QSlider, QLabel, QCheckBox, 
-                           QGroupBox, QGridLayout, QFileDialog)
+                           QGroupBox, QGridLayout, QFileDialog, QComboBox)
 from PyQt5.QtCore import Qt
 from math import pi
 
 import rospy
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String
 
 class Projector(QMainWindow):
     def __init__(self, config_path='config.json'):
@@ -23,6 +23,9 @@ class Projector(QMainWindow):
         rospy.init_node('control_panel_gui', anonymous=True)
 
         self.matrix_pub = rospy.Publisher('/control/matrix', Float32MultiArray, queue_size=10)
+        self.optimize_action_pub = rospy.Publisher('/control/optimize_action', String, queue_size=1)
+
+        self.matrix_sub = rospy.Subscriber('/radar/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
         
         # Camera parameters
         self.config_path = config_path
@@ -149,6 +152,36 @@ class Projector(QMainWindow):
         
         transform_group.setLayout(transform_layout)
         
+        # Optimization buttons
+        auto_calib_group = QGroupBox("Auto Calibration")
+        auto_calib_layout = QVBoxLayout()
+        self.record_start_button = QPushButton("開始錄製")
+        self.record_start_button.clicked.connect(lambda: self.send_action("record_start"))
+
+        self.record_stop_button = QPushButton("停止錄製")
+        self.record_stop_button.clicked.connect(lambda: self.send_action("record_stop"))
+
+        self.clear_button = QPushButton("清除片段")
+        self.clear_button.clicked.connect(lambda: self.send_action("clear"))
+
+        self.optimize_button = QPushButton("開始優化")
+        self.optimize_button.clicked.connect(lambda: self.send_action("optimize"))
+
+        # Method selection
+        method_label = QLabel("選擇優化方法:")
+        self.method_combo = QComboBox()
+        self.method_combo.addItems(["L-BFGS-B", "Powell", "Nelder-Mead"])
+        self.method_combo.setCurrentText("L-BFGS-B")
+        # self.method_combo.currentTextChanged.connect(self.send_action)
+
+        auto_calib_layout.addWidget(method_label)
+        auto_calib_layout.addWidget(self.method_combo)
+        auto_calib_layout.addWidget(self.record_start_button)
+        auto_calib_layout.addWidget(self.record_stop_button)
+        auto_calib_layout.addWidget(self.clear_button)
+        auto_calib_layout.addWidget(self.optimize_button)
+        auto_calib_group.setLayout(auto_calib_layout)
+
         # Action buttons
         action_group = QGroupBox("Actions")
         action_layout = QVBoxLayout()
@@ -166,6 +199,7 @@ class Projector(QMainWindow):
         # Add all groups to control panel
         control_layout.addWidget(scale_group)
         control_layout.addWidget(transform_group)
+        control_layout.addWidget(auto_calib_group)
         control_layout.addWidget(action_group)
         control_layout.addStretch(1)
         control_panel.setLayout(control_layout)
@@ -324,6 +358,22 @@ class Projector(QMainWindow):
         matrix_msg.data = self.extrinsic_matrix.flatten().tolist()
         self.matrix_pub.publish(matrix_msg)
     
+    def update_matrix_from_auto_calib(self, msg):
+        """Update extrinsic matrix from auto calibration message"""
+        self.extrinsic_matrix = np.array(msg.data).reshape(4, 4)
+        self.update_matrix_display()
+        print("Received new extrinsic matrix from auto calibration")
+        
+
+    # Optimization action
+    def send_action(self, action):
+        method = self.method_combo.currentText()
+        payload = json.dumps([action, method])
+        msg = String(data=payload)
+        self.optimize_action_pub.publish(msg)
+        print(f"已送出動作: {action}, 方法: {method}")
+
+
     def save_calibration(self):
         """Save current calibration to a file"""
         file_path, _ = QFileDialog.getSaveFileName(

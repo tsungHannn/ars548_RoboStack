@@ -1,6 +1,6 @@
 {
   "camera_topic": "/aravis_cam/image_color",
-  "radar_topic": "/radar/point_cloud_object",
+  "radar_topic": "/radar_filter",
 
   "echo_topic": "/traffic_echo",
   "track_topic": "/traffic_track",
@@ -11,6 +11,7 @@
   "fps": 20,
   "stats_interval_seconds": 15,
   "radar_track_enabled": false,
+  "optimize": true,
 
   "model_enabled": true,
   "model": {

@@ -623,6 +623,7 @@ class Ars548_Driver {
             sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msgObj,"z");
             sensor_msgs::PointCloud2Iterator<float> iter_vx(cloud_msgObj,"vx");
             sensor_msgs::PointCloud2Iterator<float> iter_vy(cloud_msgObj,"vy");
+            sensor_msgs::PointCloud2Iterator<float> iter_id(cloud_msgObj,"id");
 
 
             if(nbytes<0){
@@ -668,6 +669,7 @@ class Ars548_Driver {
                             *iter_z=object_List.ObjectList_Objects[i].u_Position_Z;
                             *iter_vx=object_List.ObjectList_Objects[i].f_Dynamics_AbsVel_X;
                             *iter_vy=object_List.ObjectList_Objects[i].f_Dynamics_AbsVel_Y;
+                            *iter_id=object_List.ObjectList_Objects[i].u_ID;
                             //To show the direction of the moving object
                             fillDirectionMessage(cloud_Direction,object_List,i);
                         } 
@@ -763,12 +765,13 @@ class Ars548_Driver {
         
         //Set fields and size of every PointCloud
         //Object Cloud
-         modifierObject.setPointCloud2Fields(5,
+         modifierObject.setPointCloud2Fields(6,
             "x",1,sensor_msgs::PointField::FLOAT32,
             "y",1,sensor_msgs::PointField::FLOAT32,
             "z",1,sensor_msgs::PointField::FLOAT32,
             "vx",1,sensor_msgs::PointField::FLOAT32,
-            "vy",1,sensor_msgs::PointField::FLOAT32
+            "vy",1,sensor_msgs::PointField::FLOAT32,
+            "id",1,sensor_msgs::PointField::FLOAT32
         );
      
         modifierObject.reserve(SIZE);

@@ -149,6 +149,8 @@
 - 開啟校正面板：
     - 可以透過指令 `python launch.py --control`，開啟主要程式同時開啟校正面板。
     - 也可以直接 `python projector.py` 開啟校正面板。
+      
+   ![image](https://github.com/user-attachments/assets/5d27916b-136d-403f-96de-57846302038e)
 
     
 

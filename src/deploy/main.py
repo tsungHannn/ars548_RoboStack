@@ -25,9 +25,9 @@ from pynput import keyboard
 from pynput.keyboard import Controller, Key
 
 # import keyboard
-# import threading
+import threading
 
-from utils import json_to_object
+from utils import json_to_object, yaml_to_object
 
 
 from ars548_messages.msg import ObjectList
@@ -75,7 +75,7 @@ class TrafficStats:
     mean_speed: float = 0
 
 class TrafficMonitor():
-    def __init__(self, config_path='config.json'):
+    def __init__(self, config_path='config.yaml'):
         rospy.init_node('traffic_monitor')
         self.setup_parameters(config_path)
         self.setup_topics()
@@ -86,9 +86,11 @@ class TrafficMonitor():
 
     
     def setup_parameters(self, config_path):
-        with open(config_path, 'r') as f:
-            config_data = json.load(f)
-        self.config = json_to_object(config_data)
+        # with open(config_path, 'r') as f:
+        #     config_data = json.load(f)
+        # self.config = json_to_object(config_data)
+
+        self.config = yaml_to_object(config_path)
 
         rospy.loginfo(self.config)
 
@@ -130,6 +132,8 @@ class TrafficMonitor():
             self.save_optimize_mode = False # 控制第一次按下是儲存，第二次才進行最佳化
             self.optimize = False # 如果再optimize，就不要繼續跑偵測那些了
             self.optimize_method = "L-BFGS-B" # 優化方法
+            self.sampling_interval = 1 # 儲存的間隔 (1的話就是每一幀都要)
+            self.frame_count = 0
 
             # 把參數(quat)變成外參
             # self.new_extrisics_matrix = self.transformation_matrix(self.extrinsic_param_quat).tolist()
@@ -144,10 +148,12 @@ class TrafficMonitor():
 
             # 可視化
             self.visualize_pub = rospy.Publisher('/optimize_visualize', Image, queue_size=1)
+            self.replay_recorded = False # 持續撥放已經儲存的片段
 
-            print("原始外參:", self.extrinsic_matrix)
-            print("原始參數(Euler):", self.quaternion_to_euler(self.extrinsic_param_quat))
-            print("原始參數(Quaternion):", self.extrinsic_param_quat)
+            # print("原始外參:", self.extrinsic_matrix)
+            # print("原始參數(Euler):", self.quaternion_to_euler(self.extrinsic_param_quat))
+            # print("原始參數(Quaternion):", self.extrinsic_param_quat)
+            
             # rospy.loginfo("按 R 以進行錄製，S 停止錄製，F清除已錄製資料，O 進行優化")
             # # 啟動鍵盤監聽
             # with keyboard.Listener(on_press=self.on_press) as listener:
@@ -509,24 +515,53 @@ class TrafficMonitor():
             command = json.loads(msg.data)
             action = command[0]
             method = command[1]
+            sample_interval = command[2]
         except Exception as e:
             rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             return
         
         self.optimize_method = method
+        self.sampling_interval = int(sample_interval)
         if action == 'record_start':
             self.save_optimize_mode = True
             print("開始錄製")
         elif action == 'record_stop':
             self.save_optimize_mode = False
-            print("停止錄製，目前已錄製", len(self.saved_optimize_data), "幀")
+            print("停止錄製，經過", self.frame_count, "幀，interval=", self.sampling_interval, "已錄製", len(self.saved_optimize_data), "幀")
+            if len(self.saved_optimize_data) > 0 and self.replay_recorded == False:
+                threading.Thread(target=self.vis_recorded_data, daemon=True).start()
+                self.replay_recorded = True
         elif action == 'clear':
             self.saved_optimize_data.clear()
+            self.frame_count = 0
+            self.replay_recorded = False
             rospy.loginfo("清除已錄製的資料")
         elif action == 'optimize':
             print("開始優化")
             self.optimize = True
 
+
+    def vis_recorded_data(self):
+        """
+        持續地循環播放已錄製的影像和雷達投影。
+        可配合 threading.Thread 在 background 執行。
+        """
+        if len(self.saved_optimize_data) == 0:
+            rospy.loginfo("目前沒有已儲存的資料可視化")
+            return
+
+        rospy.loginfo("開始循環播放已儲存的資料...")
+        while not rospy.is_shutdown() and len(self.saved_optimize_data) > 0:
+            for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(self.saved_optimize_data):
+                vis_img = image.copy()
+
+                vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
+                self.visualize_pub.publish(vis_msg)
+                rospy.sleep(0.1)  # 控制 FPS
+
+
+
+    
     def compute_loss(self, proj_pts, bboxes, image=None, visualize=False):
         loss = 0.0
         vis_img = image.copy() if visualize and image is not None else None
@@ -560,7 +595,6 @@ class TrafficMonitor():
             vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img)
             self.visualize_pub.publish(vis_msg)
             self.video_writer.write(vis_img)
-
 
 
         return loss / len(proj_pts) if proj_pts.shape[0] > 0 else float('inf')
@@ -694,9 +728,10 @@ class TrafficMonitor():
 
         # 自動化校正
         # 優化外參
-        
         if self.save_optimize_mode == True:
-            self.saved_optimize_data.append([points_3d, boxes, ids, frame.copy()])
+            if self.frame_count % self.sampling_interval == 0:
+                self.saved_optimize_data.append([points_3d, boxes, ids, frame.copy()])
+            self.frame_count += 1
 
         if self.optimize == True:
             start_time = rospy.Time.now()

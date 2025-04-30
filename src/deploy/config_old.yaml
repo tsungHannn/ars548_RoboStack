@@ -1,0 +1,39 @@
+camera_topic: /aravis_cam/image_color
+radar_topic: /radar_filter
+
+echo_topic: /traffic_echo
+track_topic: /traffic_track
+radar_project_topic: /traffic_radar_project
+optimize_target_topic: /traffic_optimize_target
+final_topic: /traffic_final
+
+fps: 20
+stats_interval_seconds: 15
+radar_track_enabled: false
+optimize: true
+
+model_enabled: true
+model:
+  path: yolo11m.pt
+  classes:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+
+camera:
+  extrinsic_matrix:
+    - [0.0017, -0.9999, 0.005, 0.117]
+    - [-0.1066, -0.005, -0.99, 4.707]
+    - [0.9942, 0.0011, -0.1066, -2.1814]
+    - [0, 0, 0, 1]
+  camera_matrix:
+    - [2413.911679, 0.000000, 1059.332971]
+    - [0.000000, 2161.173075, 745.776449]
+    - [0.000000, 0.000000, 1.000000]
+  width: 2048
+  height: 1536

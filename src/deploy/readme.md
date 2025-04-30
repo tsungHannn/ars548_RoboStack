@@ -145,3 +145,23 @@
 7. 重開機之後應該就可以直接用筆電使用遠端桌面連線登入了
 
 
+## 相機-雷達校正
+- 開啟校正面板：
+    - 可以透過指令 `python launch.py --control`，開啟主要程式同時開啟校正面板。
+    - 也可以直接 `python projector.py` 開啟校正面板。
+
+    
+
+- 校正面板使用說明：
+    - Calibration Scale：調整旋轉、平移的 step size。
+    - Transformation Controls：直接調整外參的旋轉、平移，調整大小由 Calibration Scale 控制。
+    - Auto Calibration：自動化校正功能。
+      - 優化方法：SciPy 套件的求最小值之方式。可以參考 [Method](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html)。
+      - 取樣間隔：錄製時要間隔幾幀(1代表每一幀都儲存，數字愈大間隔愈久)。
+        - e.g. 取樣間隔2 → 按下開始錄製後，經過 60 幀的話，只會儲存其中 30 幀，每間隔一幀才會儲存。
+      - 使用方式：
+        1. 選擇優化方法與取樣間隔。
+        2. 按下開始錄製後，系統會開始錄製片段。
+        3. 按下停止錄製後，系統會重播已錄製的片段。想要重新錄製的話可以按清除片段後，重新開始錄製。
+        4. 按下開始優化後即開始計算最佳外參。(註: 畫面上有藍點、綠點、紅線代表正在進行優化)
+    - Actions：校正結果不理想，可以 Reset 回到一開始的狀態。校正完成後按下 Save 則會將結果寫入檔案中。

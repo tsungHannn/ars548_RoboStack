@@ -167,3 +167,12 @@
         3. 按下停止錄製後，系統會重播已錄製的片段。想要重新錄製的話可以按清除片段後，重新開始錄製。
         4. 按下開始優化後即開始計算最佳外參。(註: 畫面上有藍點、綠點、紅線代表正在進行優化)
     - Actions：校正結果不理想，可以 Reset 回到一開始的狀態。校正完成後按下 Save 則會將結果寫入檔案中。
+
+## 相機內參校正
+- 安裝校正工具 `micromamba install -c robostack-staging ros-noetic-camera-calibration`
+- 開啟程式 `python launch.py --stream`
+- 開啟新的 Terminal
+- 執行校正程式 `rosrun camera_calibration cameracalibrator.py --size 9x6 --square 0.029 image:=/aravis_cam/image_color_calib`
+    > --size：棋盤格的格子數量
+    > --square：棋盤格的格子大小(單位：m)
+    

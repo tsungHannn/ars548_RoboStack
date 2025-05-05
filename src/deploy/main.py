@@ -703,7 +703,6 @@ class TrafficMonitor():
         self.time_check(stamp)
 
         echo_frame = frame = self.cv_bridge.imgmsg_to_cv2(image_msg)
-
         # detect and track
         if self.config.model_enabled:
             boxes, ids, class_ids, track_frame = self.detect_objects(frame, self.frame_id)

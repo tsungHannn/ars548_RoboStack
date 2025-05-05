@@ -1,5 +1,5 @@
-- [雷達、攝影機環境建置](#雷達、攝影機環境建置)
-- [遠端連線](#設定遠端連線)
+- [雷達、攝影機環境建置](#雷達攝影機環境建置)
+- [設定遠端連線:](#設定遠端連線)
 - [相機-雷達校正](#相機-雷達校正)
 - [相機內參校正](#相機內參校正)
 
@@ -49,38 +49,35 @@
     ```bash
     sudo apt-get install ffmpeg 
     ```
-4. Install RoboStack
-   ** Note: 官網更新的Dependence可能會有問題，先執行下一步，git clone ars548_RoboStack 之後 
-    ```
-    cd ars548_RoboStack/src/deploy
-    micromamba env create -n ros -f env.yaml
-    micromamba activate ros
-    pip install ultralytics rotpy git+https://github.com/eric-wieser/ros_numpy.git
-    ```
+4. Install [RoboStack](https://robostack.github.io/GettingStarted.html)
+    - 直接使用 yaml 建置 micromamba 環境 (舊版本)
+        ```
+        cd ars548_RoboStack/src/deploy
+        micromamba env create -n ros -f env.yaml
+        micromamba activate ros
+        ```
 
-    輸出 micromamba 環境:
-    `micromamba env export > env.yaml`
+        > 輸出目前 micromamba 環境: `micromamba env export > env.yaml`
 
+    - 官網的RoboStack安裝:   
+        ```bash
+        # Create a ros-noetic desktop environment
+        micromamba create -n ros -c conda-forge -c robostack-staging ros-noetic-desktop
 
-    官網的RoboStack安裝(Not Suggested):   
-    ```bash
-    # 直接安裝可能會有問題
-    # Create a ros-noetic desktop environment
-    micromamba create -n ros -c conda-forge -c robostack-staging ros-noetic-desktop
+        # Activate the environment
+        micromamba activate ros
 
-    # Activate the environment
-    micromamba activate ros
+        # Installing tools for local development
+        micromamba install -c conda-forge compilers cmake pkg-config make ninja colcon-common-extensions catkin_tools rosdep
 
-    # Installing tools for local development
-    micromamba install -c conda-forge compilers cmake pkg-config make ninja colcon-common-extensions catkin_tools rosdep
+        micromamba install -n ros -y -c conda-forge -c robostack-staging ros-noetic-desktop ros-noetic-compressed-image-transport ros-noetic-can-msgs
+        ```
 
-    micromamba install -n ros -y -c conda-forge -c robostack-staging ros-noetic-desktop ros-noetic-compressed-image-transport ros-noetic-can-msgs
-    ```
-
-    可以在 bashrc 裡面加上 alias，之後開環境就不用打一串指令
+    可以在 bashrc 裡面加上 alias，之後開環境就不用每次都打`micromamba activate ros`
     ```bash
     alias ros="micromamba activate ros"
     ```
+    之後新開 Terminal 後就可以直接打 `ros` 就進入 ROS 環境，不用打一串。
 5. Install ars548_RoboStack
     ```bash
     git clone https://github.com/tsungHannn/ars548_RoboStack.git

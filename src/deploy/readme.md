@@ -1,3 +1,9 @@
+- [雷達、攝影機環境建置](#雷達、攝影機環境建置)
+- [遠端連線](#設定遠端連線)
+- [相機-雷達校正](#相機-雷達校正)
+- [相機內參校正](#相機內參校正)
+
+
 ## 雷達、攝影機環境建置
 ![494689913_552456924250956_4257150307974944196_n](https://github.com/user-attachments/assets/0938145d-52ea-4b60-adff-3f5db6aa1491)
 
@@ -177,6 +183,7 @@
 - 執行校正程式 `rosrun camera_calibration cameracalibrator.py --size 9x6 --square 0.029 image:=/aravis_cam/image_color_calib`
     > --size：棋盤格的格子數量
     > --square：棋盤格的格子大小(單位：m)
+    > 其他使用方式可參考[這裡](https://wiki.ros.org/camera_calibration/Tutorials/MonocularCalibration)
 
 相機拍棋盤格：
 ![494329775_705407518666240_7509662502268488214_n](https://github.com/user-attachments/assets/38ad6af5-e044-4135-8613-ecd7a05afbf8)

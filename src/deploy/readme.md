@@ -1,4 +1,6 @@
 ## 雷達、攝影機環境建置
+![494689913_552456924250956_4257150307974944196_n](https://github.com/user-attachments/assets/0938145d-52ea-4b60-adff-3f5db6aa1491)
+
 1. 設定netplan: /etc/netplan/01-network-manager-all.yaml
    > 第一個eno1是為了遠端連線用，如果不用筆電連線的話可以不用設定
     ```yaml
@@ -175,4 +177,15 @@
 - 執行校正程式 `rosrun camera_calibration cameracalibrator.py --size 9x6 --square 0.029 image:=/aravis_cam/image_color_calib`
     > --size：棋盤格的格子數量
     > --square：棋盤格的格子大小(單位：m)
+
+相機拍棋盤格：
+![494329775_705407518666240_7509662502268488214_n](https://github.com/user-attachments/assets/38ad6af5-e044-4135-8613-ecd7a05afbf8)
+
+執行畫面：
+![Screenshot from 2025-05-05 14-25-49](https://github.com/user-attachments/assets/1ba62405-602f-460b-9c7e-e642cff47eb9)
+
+使用不同角度拍攝棋盤格，之後按下 CALIBRATE 按鈕後，校正結果會在 Terminal：
+![Screenshot from 2025-05-05 14-28-26_1](https://github.com/user-attachments/assets/8dec14b5-1774-4b88-848b-6c33a249644f)
+
+
     

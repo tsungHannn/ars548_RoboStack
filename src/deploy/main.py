@@ -198,6 +198,7 @@ class TrafficMonitor():
         self.pub_radar_original = rospy.Publisher("/radar_original_project", Image, queue_size=1)
         self.pub_range = rospy.Publisher("/radar_range", MarkerArray, queue_size=1)
         self.pub_radar_filter = rospy.Publisher('/radar_filter', PointCloud2, queue_size=1)
+        self.pub_radar_xyz_vxvy_id = rospy.Publisher('/radar_object_xyz_vxvy_id', PointCloud2, queue_size=1)
         self.pub_radar_marker = rospy.Publisher('/radar_marker', MarkerArray, queue_size=1)
         self.pub_matrix = rospy.Publisher('/radar/extrinsic_matrix', Float32MultiArray, queue_size=1)
 
@@ -766,9 +767,10 @@ class TrafficMonitor():
             rospy.loginfo("原始參數: %s", str(self.extrinsic_param_quat))
             rospy.loginfo_throttle(5, f'Processing time: {(end_time - start_time).to_sec():.3f}s')
             
-            with open(f"optimize_history.txt", 'w') as f:
-                for param, loss in self.optimize_history:
-                    f.write(f"{param} {loss}\n")
+            # 把校正紀錄存下來
+            # with open(f"optimize_history.txt", 'w') as f:
+            #     for param, loss in self.optimize_history:
+            #         f.write(f"{param} {loss}\n")
             
             matrix_msg = Float32MultiArray()
             matrix_msg.data = self.extrinsic_matrix.flatten().tolist()
@@ -860,6 +862,7 @@ class TrafficMonitor():
         ))
         
         radar_point_filter = [] # 只留速度大於1的
+        radar_point_xyz_vxvy_id = [] # 雷達點雲資料
 
         # Iterate through the points in the PointCloud2 message
         for obj in radar_obj.objectlist_objects:
@@ -870,7 +873,7 @@ class TrafficMonitor():
             vx = obj.f_dynamics_absvel_x
             vy = obj.f_dynamics_absvel_y
 
-
+            radar_point_xyz_vxvy_id.append([x, y, z, vx, vy, id])
 
 
 
@@ -942,11 +945,29 @@ class TrafficMonitor():
             PointField('cls', 24, PointField.FLOAT32, 1)
         ]
         point_cloud_filter = pc2.create_cloud(header, fields, radar_point_filter)
+        
+
+        header = Header()
+        # header.stamp = rospy.Time.now()
+        header.stamp = radar_obj.header.stamp
+        header.frame_id = radar_pc.header.frame_id
+        fields = [
+            PointField('x', 0, PointField.FLOAT32, 1),
+            PointField('y', 4, PointField.FLOAT32, 1),
+            PointField('z', 8, PointField.FLOAT32, 1),
+            PointField('vx', 12, PointField.FLOAT32, 1),
+            PointField('vy', 16, PointField.FLOAT32, 1),
+            PointField('id', 20, PointField.FLOAT32, 1),
+        ]
+        point_cloud_xyz_vxvy_id = pc2.create_cloud(header, fields, radar_point_xyz_vxvy_id)
+
         self.pub_radar_filter.publish(point_cloud_filter)
+        self.pub_radar_xyz_vxvy_id.publish(point_cloud_xyz_vxvy_id)
 
         self.pub_radar_marker.publish(markers)
 
 if __name__ == '__main__':
+    print(torch.cuda.is_available())
     try:
         monitor = TrafficMonitor()
         rospy.spin()

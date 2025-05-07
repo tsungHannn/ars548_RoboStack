@@ -15,6 +15,7 @@ class SpinnakerCameraNode:
         
         # Set up ROS publisher
         self.image_pub = rospy.Publisher('/aravis_cam/image_color', Image, queue_size=10)
+        self.image_calib_pub = rospy.Publisher('/aravis_cam/image_color_calib', Image, queue_size=10)
         self.compressed_image_pub = rospy.Publisher('/aravis_cam/image_color/compressed', CompressedImage, queue_size=10)
         self.bridge = CvBridge()
         
@@ -70,13 +71,16 @@ class SpinnakerCameraNode:
             
             # Convert OpenCV image to ROS image message
             ros_image = self.bridge.cv2_to_imgmsg(np_array, '8UC3')
+            ros_image_calib = self.bridge.cv2_to_imgmsg(np_array, 'bgr8')
             try:
                 # ros_image = self.bridge.cv2_to_imgmsg(np_array, '8UC3')
                 ros_image.header.stamp = ros_timestamp
+                ros_image_calib.header.stamp = ros_timestamp
 
                 self.compressed_image_pub.publish(self.bridge.cv2_to_compressed_imgmsg(np_array))
             
                 self.image_pub.publish(ros_image)
+                self.image_calib_pub.publish(ros_image_calib)
             except Exception as e:
                 rospy.logerr(f"Error converting/publishing image: {e}")
             #rospy.loginfo(f'Image: {frame_id} {timestamp}')

@@ -480,7 +480,7 @@ class TrafficMonitor():
             x, y = int(x - w / 2), int(y - h / 2)
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
             
-            cv2.putText(frame, f'{obj.id}', (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
+            cv2.putText(frame, f'{obj.id}', (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
             # cv2.putText(frame, f'{obj.speed*3.6:.2f} m/s', (x, y + 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
             # cv2.putText(frame, f'{obj.dist:.2f} m', (x, y + 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
             # cv2.circle(frame, [int(i) for i in obj.p2], 10, (0, 255, 0), -1)
@@ -530,6 +530,8 @@ class TrafficMonitor():
             self.save_optimize_mode = False
             print("停止錄製，經過", self.frame_count, "幀，interval=", self.sampling_interval, "已錄製", len(self.saved_optimize_data), "幀")
             if len(self.saved_optimize_data) > 0 and self.replay_recorded == False:
+                # 過濾靜止物件
+                self.filter_static_objects_by_track_id()
                 threading.Thread(target=self.vis_recorded_data, daemon=True).start()
                 self.replay_recorded = True
         elif action == 'clear':
@@ -551,21 +553,26 @@ class TrafficMonitor():
             rospy.loginfo("目前沒有已儲存的資料可視化")
             return
 
-        rospy.loginfo("開始循環播放已儲存的資料...")
+        rospy.loginfo("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_optimize_data))
         while not rospy.is_shutdown() and len(self.saved_optimize_data) > 0:
             for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(self.saved_optimize_data):
                 vis_img = image.copy()
+
+                # 繪製物件中心點
+                for box in bboxes:
+                    cx, cy, w, h = box
+                    cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)
 
                 vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
                 self.visualize_pub.publish(vis_msg)
                 rospy.sleep(0.1)  # 控制 FPS
 
-
-
-    
     def compute_loss(self, proj_pts, bboxes, image=None, visualize=False):
         loss = 0.0
         vis_img = image.copy() if visualize and image is not None else None
+
+        distances = []  # 用於統計距離分布
+        valid_distances = []  # 用於計算有效的損失
 
         for pt in proj_pts:
             x, y = pt
@@ -573,46 +580,70 @@ class TrafficMonitor():
             closest_center = None
 
             for box in bboxes:
-                cx, cy, w, h = box # cx, cy 是框中心
-                # cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                cx, cy, w, h = box  # cx, cy 是框中心
                 dist = np.sqrt((x - cx)**2 + (y - cy)**2)
                 if dist < min_dist:
                     min_dist = dist
                     closest_center = (int(cx), int(cy))
 
+            distances.append(min_dist)
+
             if visualize and vis_img is not None and closest_center is not None:
                 pt_int = (int(x), int(y))
-                cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 紅線
+                # 判斷是否為有效距離
+                if min_dist <= np.median(distances) + 1.5 * np.std(distances):
+                    cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 紅線 - 有效距離
+                else:
+                    cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)  # 綠線 - 忽略距離
                 cv2.circle(vis_img, pt_int, 15, (255, 0, 0), -1)  # 藍點（雷達投影）
                 cv2.circle(vis_img, closest_center, 15, (0, 255, 0), -1)  # 綠點（框中心）
 
-            loss += min_dist
-        
+        if len(distances) > 0:
+            median_dist = np.median(distances)
+            std_dist = np.std(distances)
+
+            for dist in distances:
+                # 過濾掉距離過遠的點（雜點）
+                if dist <= median_dist + 1.5 * std_dist:
+                    valid_distances.append(dist)
+
+        # 計算損失：使用有效距離平均值
+        loss = np.mean(valid_distances) if len(valid_distances) > 0 else float('inf')
+
         for box in bboxes:
             cx, cy, w, h = box
-            cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)  # 綠點（框中心）
+            cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)  # 綠點（框中心
 
         if visualize and vis_img is not None:
             vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img)
             self.visualize_pub.publish(vis_msg)
             self.video_writer.write(vis_img)
 
+        return loss
 
-        return loss / len(proj_pts) if proj_pts.shape[0] > 0 else float('inf')
 
-    def batch_optimization_loss(self, extrinsic_param, saved_data, visualize=False):
+
+
+
+    def batch_optimization_loss(self, extrinsic_param_quat, saved_data, visualize=False):
         # qx, qy, qz, qw, tx, ty, tz = extrinsics_param
-        normalized_param = self.normalize_quaternion(extrinsic_param)
+        normalized_param = self.normalize_quaternion(extrinsic_param_quat)
+        extrinsic_matrix = self.transformation_matrix(normalized_param).tolist()
 
         total_loss = 0.0
+
         for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(saved_data):
-            extrinsic_matrix = self.transformation_matrix(normalized_param).tolist()
             projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+
             loss = self.compute_loss(projected, bboxes, image=image, visualize=visualize)
             total_loss += loss
 
-        print("Param:", extrinsic_param, "Loss:", total_loss)
-        self.optimize_history.append((extrinsic_param, total_loss))
+
+
+        # Print param and loss
+        print(f"Param: {normalized_param}, Loss: {total_loss}")
+
+        self.optimize_history.append((extrinsic_param_quat, total_loss))
         return total_loss
 
 
@@ -648,7 +679,9 @@ class TrafficMonitor():
         qy /= norm
         qz /= norm
         qw /= norm
-        return [qx, qy, qz, qw, tx, ty, tz]
+        # return [qx, qy, qz, qw, tx, ty, tz]
+        # 將每個元素轉換為 float 類型，避免出現 np.float64
+        return [float(qx), float(qy), float(qz), float(qw), float(tx), float(ty), float(tz)]
     
 
 
@@ -735,8 +768,7 @@ class TrafficMonitor():
 
         if self.optimize == True:
             start_time = rospy.Time.now()
-            # 過濾靜止物件
-            self.filter_static_objects_by_track_id()
+            
             rotation_bounds = [(-1, 1)] * 4
             translation_bounds = [(-10, 10)] * 3
             bounds = rotation_bounds + translation_bounds
@@ -745,8 +777,10 @@ class TrafficMonitor():
 
             # qx, qy, qz, qw = self.euler_to_quaternion(rx, ry, rz) # 歐拉角轉換成四元數
             # self.extrinsic_param_quat = [qx, qy, qz, qw, tx, ty, tz] # 準備優化: 旋轉+位移
-            init_extrinsic_param_quat = self.extrinsic_param_quat.copy()
-            
+            # init_extrinsic_param_quat = self.extrinsic_param_quat.copy()
+            self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
+
+
             print("開始優化, method:", self.optimize_method)
             result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
                             args=(self.saved_optimize_data, True), method=self.optimize_method, bounds=bounds)
@@ -754,13 +788,13 @@ class TrafficMonitor():
             self.extrinsic_matrix = self.transformation_matrix(result.x)
             end_time = rospy.Time.now()
             print("New extrinsic matrix:\n", self.extrinsic_matrix)
-            print("-"*20)
-            print("Old extrinsic matrix:\n", np.array(self.original_extrinsic_matrix))
+            # print("-"*20)
+            # print("Old extrinsic matrix:\n", np.array(self.original_extrinsic_matrix))
 
             rospy.loginfo("最佳化完成，共優化: %d 幀，最小損失: %.2f", len(self.saved_optimize_data), result.fun)
             
             rospy.loginfo("最佳參數: %s", str(result.x))
-            rospy.loginfo("初始參數: %s", str(init_extrinsic_param_quat))
+            # rospy.loginfo("初始參數: %s", str(init_extrinsic_param_quat))
             result_quat_param = list(result.x)
             result_euler_param = self.quaternion_to_euler(result_quat_param)
             rospy.loginfo("轉換回角度: %s", result_euler_param)
@@ -803,7 +837,7 @@ class TrafficMonitor():
         # rospy.loginfo_throttle(5, f'Processing time: {(time_end - time_start).to_sec():.3f}s')
 
 
-    def filter_static_objects_by_track_id(self, movement_threshold=10.0, min_frames=3):
+    def filter_static_objects_by_track_id(self, movement_threshold=3.0, min_frames=3):
         """
         根據 track_id 的中心移動距離，過濾每幀中靜止的物件框
         """
@@ -825,11 +859,16 @@ class TrafficMonitor():
         for tid, centers in track_history.items():
             if len(centers) < min_frames:
                 continue
+
             total_dist = sum(
                 np.linalg.norm(np.array(centers[i]) - np.array(centers[i - 1]))
                 for i in range(1, len(centers))
             )
-            if total_dist < movement_threshold:
+
+            # 如果平均移動距離小於閾值，則視為靜止
+            avg_dist = total_dist / (len(centers) - 1)
+            print(f"track_id: {tid}, 總移動距離: {total_dist:.2f}，幀數: {len(centers)}，平均移動距離: {avg_dist:.2f}")
+            if avg_dist < movement_threshold:
                 static_ids.add(tid)
 
         print(f"判斷為靜止的 track_ids: {static_ids}")
@@ -903,8 +942,9 @@ class TrafficMonitor():
             if effective_range == True:
                 speed = math.sqrt(pow(vx, 2)+pow(vy,2)) # 這個speed單位是m/s
 
+                if speed > 2:
                 # if speed > 2 and dist < 30:
-                if class_name == 'car' or class_name == 'truck' or class_name == 'motorcycle' or class_name == 'bicycle':
+                # if class_name == 'car' or class_name == 'truck' or class_name == 'motorcycle' or class_name == 'bicycle':
 
                     radar_point_filter.append([x, y, z, vx, vy, id, cls_max_index])
                     # 把資訊印在rviz
@@ -920,7 +960,9 @@ class TrafficMonitor():
                         # text=f"id: {obj.u_id}\nWxL:{width:.2f}x{length:.2f}m\nSpeed:{speed*3.6:.2f}km/h\nClass:{self.radar_cls_list[cls_max_index]}\nDist:{dist:.2f}\nHeight:{z:.2f}m\nElevation_angle: {elevation_angle:.2f}",
                         # text=f"dist: {dist:.2f}\nelevation_angle: {elevation_angle:.2f}\n{speed*3.6:.2f}km/h\nClass:{classification[max_index]}",
                         # text=f"x:{obj.u_position_x}\ny:{obj.u_position_y}\nz:{obj.u_position_z}",
-                        text = f"id: {obj.u_id}\nClass:{self.radar_cls_list[cls_max_index]}",
+                        # text = f"id: {obj.u_id}\nClass:{self.radar_cls_list[cls_max_index]}",
+                        # text = f"Height:{z:.2f}",
+                        text = f"x:{x:.1f}, y:{y:.1f}\nvx:{vx:.2f}\nvy:{vy:.2f}",
                         pose=Pose(
                             position=Point(x=obj.u_position_x, y=obj.u_position_y, z=obj.u_position_z),
                             orientation=Quaternion(x=0, y=0, z=1)

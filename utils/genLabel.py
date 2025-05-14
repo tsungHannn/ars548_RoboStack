@@ -8,7 +8,7 @@ import shutil
 from tqdm import tqdm
 
 # 設定參數
-scene_path = "output/A_place/1_2025-02-26-10-13-51"  # 圖片資料夾
+scene_path = "/media/mvclab/HDD/ncsist/2025/data/rosbag2kitti_結果/B_place/7_2025-02-26-10-44-20"  # 圖片資料夾
 image_folder = os.path.join(scene_path, "png")  # 圖片資料夾
 output_folder = os.path.join(scene_path, "pre_label")  # 存放偵測結果的資料夾
 model_path = "src/deploy/yolo11m.pt"  # 可換成 yolov8s.pt、yolov8m.pt、yolov8l.pt 等
@@ -79,14 +79,20 @@ for image_name in tqdm(image_files, desc="處理圖片", unit="張"):
 
     for box, track_id, cls_id in zip(boxes, track_ids, class_ids):
         x, y, w, h = box
-        x1, y1 = int(x - w / 2), int(y - h / 2)
-        x2, y2 = int(x + w / 2), int(y + h / 2)
+        # x1, y1 = int(x - w / 2), int(y - h / 2)
+        # x2, y2 = int(x + w / 2), int(y + h / 2)
+
+        # normalize
+        x = float(x) / img.shape[1]
+        y = float(y) / img.shape[0]
+        w = float(w) / img.shape[1]
+        h = float(h) / img.shape[0]
 
 
-        track = track_history[track_id]
-        track.append((float(x), float(y)))
-        if len(track) > 30:
-            track.pop(0)
+        # track = track_history[track_id]
+        # track.append((float(x), float(y)))
+        # if len(track) > 30:
+        #     track.pop(0)
 
 
         # 加上文字標籤：track ID + 類別名稱

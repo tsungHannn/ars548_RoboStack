@@ -163,9 +163,10 @@ class TrafficMonitor():
             # threading.Thread(target=self.key_listener, daemon=True).start()
         
         self.cvInit = False
-        self.store_camera_det = False
+        self.store_camera_det = False # 儲存每幀的偵測結果(給黃老師整合)
         self.store_camera_det_path = "camera_det"
         self.frame_id = 0
+        self.camera_id = 0
         
         self.radar_cls_list = ['car', 'truck', 'motorcycle', 'bicycle', 'pedestrian', 'animal', 'hazard', 'unknown']
 
@@ -236,6 +237,7 @@ class TrafficMonitor():
     
     def camera_callback(self, image_msg: Image):
         self.data.camera = image_msg
+        self.camera_id += 1
     
     def radar_callback(self, radar_msg: PointCloud2):
         self.data.radar = radar_msg
@@ -296,7 +298,7 @@ class TrafficMonitor():
         self.pub_range.publish(range_markers)
 
 
-    def detect_objects(self, image, frame_id):
+    def detect_objects(self, image):
         dets = self.model.track(image, show=False, persist=True, tracker='bytetrack.yaml', \
             verbose=False, classes=self.config.model.classes, conf=0.08, imgsz=768, half=True)
         if not len(dets[0].boxes.xywh.cpu()):
@@ -318,7 +320,6 @@ class TrafficMonitor():
 
         # annotated_frame = dets[0].plot()
         annotated_frame = image.copy()
-        result_text = []
 
         for box, track_id, cls_id in zip(boxes, track_ids, class_ids):
             x, y, w, h = box
@@ -356,32 +357,7 @@ class TrafficMonitor():
 
             cv2.putText(annotated_frame, text, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
-            # 儲存文字資料
-            result_text.append(f"{class_name} {x1} {y1} {x2} {y2}")
-        
-
-        if self.store_camera_det:
-            # 確保資料夾存在
-            os.makedirs(self.store_camera_det_path, exist_ok=True)
-            # 清除舊檔案
-            for file in os.listdir(self.store_camera_det_path):
-                file_path = os.path.join(self.store_camera_det_path, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
             
-            os.makedirs(os.path.join(self.store_camera_det_path, "txt"), exist_ok=True)
-            os.makedirs(os.path.join(self.store_camera_det_path, "png"), exist_ok=True)
-
-
-            # 儲存圖片
-            img_path = os.path.join(self.store_camera_det_path, "png", f"frame_{frame_id:05d}.png")
-            cv2.imwrite(img_path, image)
-
-            # 儲存文字偵測結果
-            txt_path = os.path.join(self.store_camera_det_path, "txt", f"frame_{frame_id:05d}.txt")
-            with open(txt_path, 'w') as f:
-                f.write("\n".join(result_text))
-
 
 
             
@@ -422,8 +398,10 @@ class TrafficMonitor():
             # cv2.putText(radar_frame, f"{velocity:.2f}", (x + 15, y + 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 4, cv2.LINE_AA)
         return points, points_2d, tracks, radar_frame
     
-    def fusion(self, boxes, ids, class_ids, points_2d, points_3d):
+    def fusion(self, image, frame_id, boxes, ids, class_ids, points_2d, points_3d):
         mapping = defaultdict(list)
+        result_text = []
+        
         for box, box_id, cls_id in zip(boxes, ids, class_ids):
             x, y, w, h = box
             x, y = int(x - w / 2), int(y - h / 2)
@@ -443,7 +421,43 @@ class TrafficMonitor():
             p3 = np.mean([d.p3 for d in detections], axis=0)
             p2 = np.mean([d.p2 for d in detections], axis=0)
             objects.append(Detection(speed=avg, dist=dist, p3=p3, p2=p2, id=box_id, box=detections[0].box, class_id=detections[0].class_id))
+
+
+
+
+            # 儲存文字資料
+            class_name = self.model.names[detections[0].class_id] if detections[0].class_id >= 0 else "unknown"
+            x, y, w, h = detections[0].box
+            x1, y1 = int(x - w / 2), int(y - h / 2)
+            x2, y2 = int(x + w / 2), int(y + h / 2)
+            result_text.append(f"{class_name} {x1} {y1} {x2} {y2} {avg:.2f} {dist:.2f}")
         
+
+        if self.store_camera_det:
+            # 確保資料夾存在
+            os.makedirs(self.store_camera_det_path, exist_ok=True)
+            # 清除舊檔案
+            for file in os.listdir(self.store_camera_det_path):
+                file_path = os.path.join(self.store_camera_det_path, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            
+            os.makedirs(os.path.join(self.store_camera_det_path, "txt"), exist_ok=True)
+            os.makedirs(os.path.join(self.store_camera_det_path, "png"), exist_ok=True)
+
+
+            # 儲存圖片
+            img_path = os.path.join(self.store_camera_det_path, "png", f"frame_{frame_id:05d}.png")
+            cv2.imwrite(img_path, image)
+
+            # 儲存文字偵測結果
+            txt_path = os.path.join(self.store_camera_det_path, "txt", f"frame_{frame_id:05d}.txt")
+            with open(txt_path, 'w') as f:
+                f.write("\n".join(result_text))
+
+
+
+
         return objects
     
     def flow_stats(self, objects):
@@ -739,7 +753,7 @@ class TrafficMonitor():
         echo_frame = frame = self.cv_bridge.imgmsg_to_cv2(image_msg)
         # detect and track
         if self.config.model_enabled:
-            boxes, ids, class_ids, track_frame = self.detect_objects(frame, self.frame_id)
+            boxes, ids, class_ids, track_frame = self.detect_objects(frame)
             if len(boxes):
                 self.pub_track.publish(self.to_image_msg(track_frame, stamp))
         
@@ -752,7 +766,7 @@ class TrafficMonitor():
         
 
         # fuse radar points and bounding boxes
-        objects = self.fusion(boxes, ids, class_ids, points_2d, points_3d)
+        objects = self.fusion(frame.copy(), self.camera_id, boxes, ids, class_ids, points_2d, points_3d)
         self.flow_stats(objects)
 
         fusion_frame = self.vis_objects(radar_frame.copy(), objects)

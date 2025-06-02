@@ -174,7 +174,7 @@ class Projector(QMainWindow):
         method_label = QLabel("選擇優化方法:")
         self.method_combo = QComboBox() # 下拉選單
         self.method_combo.addItems(["L-BFGS-B", "Powell", "Nelder-Mead"])
-        self.method_combo.setCurrentText("L-BFGS-B")
+        self.method_combo.setCurrentText("Nelder-Mead")
         # self.method_combo.currentTextChanged.connect(self.send_action)
 
         # Sampling interval

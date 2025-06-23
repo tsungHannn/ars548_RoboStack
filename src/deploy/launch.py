@@ -2,7 +2,7 @@ import subprocess
 from argparse import ArgumentParser
 from time import sleep
 
-pre_commands = ['micromamba activate ros && source ~/workspace/ncsist/ars548_RoboStack/devel/setup.bash']
+pre_commands = ['micromamba activate ros_env && source ~/workspace/ncsist/ars548_RoboStack/devel/setup.bash']
 pre_command = ' && '.join(pre_commands)
 commands = [
     ('rviz', 'rviz -d ./main.rviz'),

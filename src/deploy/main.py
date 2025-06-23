@@ -30,6 +30,14 @@ import threading
 from utils import json_to_object, yaml_to_object
 
 
+# 雷達+相機物件偵測用到的
+from src.core import YAMLConfig
+from src.solver import TASKS
+from PIL import Image as PILImage
+import torchvision.transforms as T
+
+
+
 from ars548_messages.msg import ObjectList
 
 def project_points(points_3d, camera_matrix, extrinsic_matrix):
@@ -103,10 +111,25 @@ class TrafficMonitor():
         self.original_extrinsic_matrix = self.extrinsic_matrix.copy() # 為了顯示初始外參的投影結果
 
         if self.config.model_enabled:
-            self.model = YOLO(self.config.model.path)
-            if torch.cuda.is_available():
-                self.model.to(torch.device('cuda'))
-            rospy.loginfo(f'Model loaded on device {self.model.device}')
+            if self.config.model.modality == 'camera': # 相機物件偵測(YOLO)
+                self.model = YOLO(self.config.model.path)
+                if torch.cuda.is_available():
+                    self.model.to(torch.device('cuda'))
+                rospy.loginfo(f'Model modality: {self.config.model.modality}, Model loaded on device {self.model.device}')
+            elif self.config.model.modality == 'camera+radar': # 多模態物件偵測(RT-DETR)
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.config_path = self.config.model.config_path
+                self.checkpoint_path = self.config.model.checkpoint_path
+                self.conf_thresh = self.config.model.conf_thresh
+                self.transform = T.Compose([
+                    T.Resize((640, 640)),
+                    T.ToTensor(),
+                ])
+
+                # === 模型初始化 ===
+                self.model = self.load_model(self.config_path, self.checkpoint_path)
+                self.model.eval()
+                rospy.loginfo(f'Model modality: {self.config.model.modality}, Model loaded on device {self.device}')
 
         # if self.config.radar_track_enabled:
         #     from bytetracker import BYTETracker
@@ -128,12 +151,19 @@ class TrafficMonitor():
             self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
             
 
-            self.saved_optimize_data = [] # 儲存(radar_point, boxes)
+            self.saved_optimize_data = [] # 儲存[points_3d, boxes, ids, frame.copy()]
+            self.saved_filter_optimize_data = [] # 儲存過濾後的資料(不動的物件框、不同方向雷達點等)
             self.save_optimize_mode = False # 控制第一次按下是儲存，第二次才進行最佳化
             self.optimize = False # 如果再optimize，就不要繼續跑偵測那些了
             self.optimize_method = "L-BFGS-B" # 優化方法
             self.sampling_interval = 1 # 儲存的間隔 (1的話就是每一幀都要)
             self.frame_count = 0
+
+            # 自動校正時的過濾條件
+            self.radar_vx_filter = 'all'
+            self.radar_vy_filter = 'all'
+            self.camera_filter_x = 'all'
+            self.camera_filter_y = 'all'
 
             # 把參數(quat)變成外參
             # self.new_extrisics_matrix = self.transformation_matrix(self.extrinsic_param_quat).tolist()
@@ -148,7 +178,8 @@ class TrafficMonitor():
 
             # 可視化
             self.visualize_pub = rospy.Publisher('/optimize_visualize', Image, queue_size=1)
-            self.replay_recorded = False # 持續撥放已經儲存的片段
+            self.vis_thread_running = False # 持續撥放已經儲存的片段
+            self.vis_thread = threading.Thread(target=self.vis_recorded_data, daemon=True)
 
             # print("原始外參:", self.extrinsic_matrix)
             # print("原始參數(Euler):", self.quaternion_to_euler(self.extrinsic_param_quat))
@@ -297,7 +328,26 @@ class TrafficMonitor():
         
         self.pub_range.publish(range_markers)
 
+    # 讀取雷達+相機偵測模型
+    def load_model(self, config_path, checkpoint_path):
+        cfg = YAMLConfig(config_path, resume=checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        state = checkpoint['ema']['module'] if 'ema' in checkpoint else checkpoint['model']
+        cfg.model.load_state_dict(state)
 
+        class ModelWrapper(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = cfg.model.deploy()
+                self.postprocessor = cfg.postprocessor.deploy()
+
+            def forward(self, images, orig_target_sizes, radar_feats):
+                outputs = self.model(images, radar_feats)
+                return self.postprocessor(outputs, orig_target_sizes)
+
+        return ModelWrapper().to(self.device)
+    
+    # 相機物件偵測
     def detect_objects(self, image):
         dets = self.model.track(image, show=False, persist=True, tracker='bytetrack.yaml', \
             verbose=False, classes=self.config.model.classes, conf=0.08, imgsz=768, half=True)
@@ -358,14 +408,101 @@ class TrafficMonitor():
             cv2.putText(annotated_frame, text, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
             
-
-
-            
         return boxes, track_ids, class_ids, annotated_frame
+    
+    # 雷達+相機物件偵測
+    def detect_object_with_radar(self, image, radar_msg):
+
+        data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
+        points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32)
+
+        # Step 1: 預處理        
+        if isinstance(image, np.ndarray):
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_image = PILImage.fromarray(image_rgb)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+        else:
+            raise TypeError("Expected image as np.ndarray")
+        
+
+        # pil_image = PILImage.fromarray(image)
+        orig_size = torch.tensor([[pil_image.width, pil_image.height]]).to(self.device)
+        image_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
+        
+        if len(points) == 0:
+            # 如果雷達點數為0，製作一個空的radar_feats
+            radar_feats = torch.zeros((1, 7), device=self.device)
+        else:
+            radar_feats = torch.stack([torch.from_numpy(r).to(self.device) for r in points], dim=0)
+        radar_feats = radar_feats.unsqueeze(0)  # 增加 batch 維度
+
+
+
+        with torch.no_grad():
+            labels, boxes, scores = self.model(image_tensor, orig_size, radar_feats)
+
+        labels = labels[0].cpu().numpy()
+        boxes = boxes[0].cpu().numpy()
+        boxes = torch.tensor(boxes, device='cpu')
+        scores = scores[0].cpu().numpy()
+
+        result_boxes = []
+        result_classes = []
+        track_ids = []
+        temp_id = 0 # TODO: 實做物件追蹤(為每個物件框加上id)，現在只是隨意的編號
+
+        annotated_frame = image.copy()
+        for i, (box, label, score) in enumerate(zip(boxes, labels, scores)):
+            if score < self.conf_thresh:
+                continue
+            x1, y1, x2, y2 = box
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            cx, cy, w, h = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1), (y2 - y1)
+            result_boxes.append([cx, cy, w, h])
+            result_classes.append(int(label))
+            track_ids.append(temp_id)  # 尚無 tracking
+            temp_id += 1
+
+            # 畫框
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color=(0, 255, 0), thickness=3)
+
+            # class_name = str(label)  # 如果有對應類別名稱可以改成 self.model.names[label]
+            # 自訂資料集的class name
+            class_names = {0: 'object',
+                           1: 'bus',
+                           2: 'car',
+                           3: 'motorcycle',
+                           4: 'truck'}
+            class_name = class_names.get(int(label), 'unknown')
+
+            text = f'{class_name} conf:{score:.2f}'
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1
+            font_thickness = 2
+            text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
+            text_width, text_height = text_size
+
+            bg_x1 = x1
+            bg_y1 = y1 - text_height - 10
+            bg_x2 = x1 + text_width + 6
+            bg_y2 = y1
+            cv2.rectangle(annotated_frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color=(0, 255, 0), thickness=-1)
+
+            cv2.putText(annotated_frame, text, (x1 + 3, y1 - 5), font,
+                        font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
+
+
+        result_boxes = torch.tensor(result_boxes, device='cpu')
+        return result_boxes, track_ids, result_classes, annotated_frame
+
+
 
     def radar_to_image(self, radar_msg, frame, extrinsic_matrix):
         data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
-        points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy', 'id', 'cls']], axis=1, dtype=np.float32) # (n, 5)
+        # points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy', 'id', 'cls']], axis=1, dtype=np.float32) # (n, 5)
+        points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32) # (n, 5)
         # fix z to 1
         points[:, 2] = 1
         # v = vx + vy
@@ -392,7 +529,7 @@ class TrafficMonitor():
 
         points_2d = points_2d.astype(np.int32)
         radar_frame = frame.copy()
-        for (x, y), cls, velocity in zip(points_2d, points[:, 6], v):
+        for (x, y), velocity in zip(points_2d, v):
             cv2.circle(radar_frame, (x, y), 20, (255, 0, 0), -1)
             # cv2.putText(radar_frame, str(self.radar_cls_list[int(cls)]), (x + 15, y), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 4, cv2.LINE_AA)
             # cv2.putText(radar_frame, f"{velocity:.2f}", (x + 15, y + 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 4, cv2.LINE_AA)
@@ -426,7 +563,18 @@ class TrafficMonitor():
 
 
             # 儲存文字資料
-            class_name = self.model.names[detections[0].class_id] if detections[0].class_id >= 0 else "unknown"
+            if self.config.model.modality == 'camera':
+                class_name = self.model.names[detections[0].class_id] if detections[0].class_id >= 0 else "unknown"
+            elif self.config.model.modality == 'camera+radar':
+                class_names = {0: 'object',
+                           1: 'bus',
+                           2: 'car',
+                           3: 'motorcycle',
+                           4: 'truck'}
+                class_name = class_names.get(detections[0].class_id, 'unknown')
+            else:
+                print("Unknown modality, cannot determine class name")
+
             x, y, w, h = detections[0].box
             x1, y1 = int(x - w / 2), int(y - h / 2)
             x2, y2 = int(x + w / 2), int(y + h / 2)
@@ -488,16 +636,16 @@ class TrafficMonitor():
             # stats_result = TrafficStats(flow=self.current_stats.flow, mean_speed=self.current_stats.mean_speed)
             self.reset_traffic_stats(current_time)
 
-    def vis_objects(self, frame, objects):
-        for obj in objects:
-            x, y, w, h = obj.box.int().tolist()
-            x, y = int(x - w / 2), int(y - h / 2)
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
+    def vis_traffic_result(self, frame, objects):
+        # for obj in objects:
+        #     x, y, w, h = obj.box.int().tolist()
+        #     x, y = int(x - w / 2), int(y - h / 2)
+        #     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
             
-            cv2.putText(frame, f'{obj.id}', (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
-            # cv2.putText(frame, f'{obj.speed*3.6:.2f} m/s', (x, y + 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
-            # cv2.putText(frame, f'{obj.dist:.2f} m', (x, y + 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
-            # cv2.circle(frame, [int(i) for i in obj.p2], 10, (0, 255, 0), -1)
+        #     cv2.putText(frame, f'{obj.id}', (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
+        #     # cv2.putText(frame, f'{obj.speed*3.6:.2f} m/s', (x, y + 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
+        #     # cv2.putText(frame, f'{obj.dist:.2f} m', (x, y + 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 4, cv2.LINE_AA)
+        #     # cv2.circle(frame, [int(i) for i in obj.p2], 10, (0, 255, 0), -1)
         
         # extend frame and write current stats in bottom left with black background
         original_height = frame.shape[0]
@@ -531,31 +679,53 @@ class TrafficMonitor():
             action = command[0]
             method = command[1]
             sample_interval = command[2]
+            vx_filter = command[3] 
+            vy_filter = command[4]
+            camera_filter_x = command[5]
+            camera_filter_y = command[6]
         except Exception as e:
             rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             return
         
         self.optimize_method = method
         self.sampling_interval = int(sample_interval)
+        self.radar_vx_filter = vx_filter
+        self.radar_vy_filter = vy_filter
+        self.camera_filter_x = camera_filter_x
+        self.camera_filter_y = camera_filter_y
+
         if action == 'record_start':
             self.save_optimize_mode = True
             print("開始錄製")
-        elif action == 'record_stop':
+        elif action == 'record_stop' or action == 'filter_changed':
             self.save_optimize_mode = False
             print("停止錄製，經過", self.frame_count, "幀，interval=", self.sampling_interval, "已錄製", len(self.saved_optimize_data), "幀")
-            if len(self.saved_optimize_data) > 0 and self.replay_recorded == False:
-                # 過濾靜止物件
-                self.filter_static_objects_by_track_id()
-                threading.Thread(target=self.vis_recorded_data, daemon=True).start()
-                self.replay_recorded = True
+            if len(self.saved_optimize_data) > 0:
+                if self.vis_thread.is_alive():
+                    # 停止視覺化線程
+                    self.vis_thread_running = False
+                    self.vis_thread.join()
+
+                # 依條件過濾
+                self.filter_object()
+                
+                # print(self.saved_optimize_data)
+                # print(self.saved_filter_optimize_data)
+                self.vis_thread_running = True
+                self.vis_thread = threading.Thread(target=self.vis_recorded_data, daemon=True)
+                self.vis_thread.start()
+                # threading.Thread(target=self.vis_recorded_data, daemon=True).start()
+                # self.replay_recorded = True
         elif action == 'clear':
             self.saved_optimize_data.clear()
+            self.saved_filter_optimize_data.clear()
             self.frame_count = 0
-            self.replay_recorded = False
+            # self.replay_recorded = False
             rospy.loginfo("清除已錄製的資料")
         elif action == 'optimize':
             print("開始優化")
             self.optimize = True
+            
 
 
     def vis_recorded_data(self):
@@ -563,19 +733,28 @@ class TrafficMonitor():
         持續地循環播放已錄製的影像和雷達投影。
         可配合 threading.Thread 在 background 執行。
         """
-        if len(self.saved_optimize_data) == 0:
+        if len(self.saved_filter_optimize_data) == 0:
             rospy.loginfo("目前沒有已儲存的資料可視化")
             return
 
-        rospy.loginfo("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_optimize_data))
-        while not rospy.is_shutdown() and len(self.saved_optimize_data) > 0:
-            for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(self.saved_optimize_data):
+        rospy.loginfo("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_filter_optimize_data))
+        while not rospy.is_shutdown() and len(self.saved_filter_optimize_data) > 0 and self.vis_thread_running:
+            for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(self.saved_filter_optimize_data):
                 vis_img = image.copy()
 
-                # 繪製物件中心點
+                # 繪製物件框
                 for box in bboxes:
                     cx, cy, w, h = box
-                    cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)
+                    x1, y1 = int(cx - w / 2), int(cy - h / 2)
+                    x2, y2 = int(cx + w / 2), int(cy + h / 2)
+                    cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    # cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)
+
+                if len(points_3d) != 0:
+                    projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
+                    for pt in projected:
+                        x, y = pt
+                        cv2.circle(vis_img, (int(x), int(y)), 15, (255, 0, 0), -1)
 
                 vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
                 self.visualize_pub.publish(vis_msg)
@@ -751,26 +930,34 @@ class TrafficMonitor():
         self.time_check(stamp)
 
         echo_frame = frame = self.cv_bridge.imgmsg_to_cv2(image_msg)
+
+        
+
+
         # detect and track
         if self.config.model_enabled:
-            boxes, ids, class_ids, track_frame = self.detect_objects(frame)
-            if len(boxes):
-                self.pub_track.publish(self.to_image_msg(track_frame, stamp))
+            if self.config.model.modality == 'camera':
+                boxes, ids, class_ids, track_frame = self.detect_objects(frame)
+                if len(boxes):
+                    self.pub_track.publish(self.to_image_msg(track_frame, stamp))
+            elif self.config.model.modality == 'camera+radar':
+                boxes, ids, class_ids, track_frame = self.detect_object_with_radar(frame.copy(), radar_msg)
+        else:
+            boxes, ids, class_ids = [], [], []
+            radar_frame = frame.copy()
         
         # process radar
         # points_3d: 雷達3D點，[x, y, z, vx, vy]
-        points_3d, points_2d, radar_tracks, radar_frame = self.radar_to_image(radar_msg, frame, self.extrinsic_matrix)
-
+        points_3d, points_2d, radar_tracks, radar_frame = self.radar_to_image(radar_msg, track_frame, self.extrinsic_matrix)
         original_points_3d, original_points_2d, original_radar_tracks, original_radar_frame = self.radar_to_image(radar_msg, frame.copy(), self.original_extrinsic_matrix)
-        
         
 
         # fuse radar points and bounding boxes
         objects = self.fusion(frame.copy(), self.camera_id, boxes, ids, class_ids, points_2d, points_3d)
         self.flow_stats(objects)
 
-        fusion_frame = self.vis_objects(radar_frame.copy(), objects)
-        camera_detection = self.vis_objects(frame.copy(), objects)
+        fusion_frame = self.vis_traffic_result(radar_frame.copy(), objects)
+        camera_detection = self.vis_traffic_result(frame.copy(), objects)
         # self.pub_radar_project.publish(self.to_image_msg(fusion_frame, stamp))
 
         # 自動化校正
@@ -782,6 +969,10 @@ class TrafficMonitor():
 
         if self.optimize == True:
             start_time = rospy.Time.now()
+            # 停止視覺化線程
+            if self.vis_thread.is_alive():
+                self.vis_thread_running = False
+                self.vis_thread.join()
             
             rotation_bounds = [(-1, 1)] * 4
             translation_bounds = [(-10, 10)] * 3
@@ -797,7 +988,7 @@ class TrafficMonitor():
 
             print("開始優化, method:", self.optimize_method)
             result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
-                            args=(self.saved_optimize_data, True), method=self.optimize_method, bounds=bounds)
+                            args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
             
             self.extrinsic_matrix = self.transformation_matrix(result.x)
             end_time = rospy.Time.now()
@@ -805,7 +996,7 @@ class TrafficMonitor():
             # print("-"*20)
             # print("Old extrinsic matrix:\n", np.array(self.original_extrinsic_matrix))
 
-            rospy.loginfo("最佳化完成，共優化: %d 幀，最小損失: %.2f", len(self.saved_optimize_data), result.fun)
+            rospy.loginfo("最佳化完成，共優化: %d 幀，最小損失: %.2f", len(self.saved_filter_optimize_data), result.fun)
             
             rospy.loginfo("最佳參數: %s", str(result.x))
             # rospy.loginfo("初始參數: %s", str(init_extrinsic_param_quat))
@@ -825,6 +1016,11 @@ class TrafficMonitor():
             self.pub_matrix.publish(matrix_msg)
             
             self.optimize = False
+            # 繼續視覺化線程
+            self.vis_thread_running = True
+            self.vis_thread = threading.Thread(target=self.vis_recorded_data, daemon=True)
+            self.vis_thread.start()
+
             self.video_writer.release()
             
             
@@ -851,7 +1047,7 @@ class TrafficMonitor():
         # rospy.loginfo_throttle(5, f'Processing time: {(time_end - time_start).to_sec():.3f}s')
 
 
-    def filter_static_objects_by_track_id(self, movement_threshold=3.0, min_frames=3):
+    def filter_object(self, movement_threshold=3.0, min_frames=3):
         """
         根據 track_id 的中心移動距離，過濾每幀中靜止的物件框
         """
@@ -859,7 +1055,9 @@ class TrafficMonitor():
 
         # 建立每個 track_id 對應的中心點軌跡
         track_history = {}
-        for _, boxes, ids, _ in self.saved_optimize_data:
+        # self.saved_optimize_data: [[points_3d, boxes, ids, image], ...]
+
+        for radarPoint, boxes, ids, _ in self.saved_optimize_data:
             for box, track_id in zip(boxes, ids):
                 if track_id is None:
                     continue
@@ -870,10 +1068,16 @@ class TrafficMonitor():
 
         # 判斷靜止的 track_id
         static_ids = set()
+        up_ids = set()
+        down_ids = set()
+        left_ids = set()
+        right_ids = set()
+
         for tid, centers in track_history.items():
             if len(centers) < min_frames:
                 continue
-
+            
+            # 判斷靜止
             total_dist = sum(
                 np.linalg.norm(np.array(centers[i]) - np.array(centers[i - 1]))
                 for i in range(1, len(centers))
@@ -881,28 +1085,106 @@ class TrafficMonitor():
 
             # 如果平均移動距離小於閾值，則視為靜止
             avg_dist = total_dist / (len(centers) - 1)
-            print(f"track_id: {tid}, 總移動距離: {total_dist:.2f}，幀數: {len(centers)}，平均移動距離: {avg_dist:.2f}")
+            # print(f"track_id: {tid}, 總移動距離: {total_dist:.2f}，幀數: {len(centers)}，平均移動距離: {avg_dist:.2f}")
             if avg_dist < movement_threshold:
                 static_ids.add(tid)
+            else:
+                # 方向判斷：比較第一幀與最後一幀的 x 值
+                start_x = centers[0][0]
+                end_x = centers[-1][0]
+                if end_x > start_x:
+                    right_ids.add(tid)
+                elif end_x < start_x:
+                    left_ids.add(tid)
 
-        print(f"判斷為靜止的 track_ids: {static_ids}")
+                # 方向判斷：比較第一幀與最後一幀的 y 值
+                start_y = centers[0][1]
+                end_y = centers[-1][1]
+                if end_y < start_y:
+                    up_ids.add(tid)
+                elif end_y > start_y:
+                    down_ids.add(tid)
+                
+                # 判斷是否向上或向下移動
 
+        # print(f"判斷為靜止的 track_ids: {static_ids}")
+        # print(f"判斷為向上移動的 track_ids: {up_ids}")
+        # print(f"判斷為向下移動的 track_ids: {down_ids}")
         # 過濾每幀中的 boxes
-        filtered_data = []
+        filtered_camera = []
         for points_3d, boxes, ids, image in self.saved_optimize_data:
             new_boxes = []
             new_ids = []
             for box, track_id in zip(boxes, ids):
-                if track_id is None or track_id not in static_ids:
-                    new_boxes.append(box)
-                    new_ids.append(track_id)
-            filtered_data.append([points_3d, new_boxes, new_ids, image])
+                if self.camera_filter_x == "all" and self.camera_filter_y == "all":
+                    if track_id is None or track_id not in static_ids: # 過濾靜止id
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'all' and self.camera_filter_y == 'up':
+                    if track_id in up_ids: # 留下往上id
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'all' and self.camera_filter_y == 'down':
+                    if track_id is None or track_id in down_ids: # 留下往下id
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'left' and self.camera_filter_y == 'all':
+                    if track_id in left_ids: # 留下往左id
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'right' and self.camera_filter_y == 'all':
+                    if track_id in right_ids: # 留下往右id
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'left' and self.camera_filter_y == 'up': # 左上
+                    if track_id in left_ids and track_id in up_ids:
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'left' and self.camera_filter_y == 'down': # 左下
+                    if track_id in left_ids and track_id in down_ids:
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'right' and self.camera_filter_y == 'up': # 右上
+                    if track_id in right_ids and track_id in up_ids:
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+                elif self.camera_filter_x == 'right' and self.camera_filter_y == 'down': # 右下
+                    if track_id in right_ids and track_id in down_ids:
+                        new_boxes.append(box)
+                        new_ids.append(track_id)
+            filtered_camera.append([points_3d, new_boxes, new_ids, image])
 
-        self.saved_optimize_data = filtered_data
+        self.saved_filter_optimize_data = filtered_camera
         print("靜止框過濾完成。")
 
+        print("開始過濾雷達點...")
+        # 過濾雷達點
+        filter_radar = []
+        filtered_points = []
+        for point_3ds, boxes, ids, image in filtered_camera:
+            if self.radar_vx_filter == "vx > 0" and self.radar_vy_filter == "vy > 0":
+                filtered_points = [p for p in point_3ds if p[3] > 0 and p[4] > 0]
+            elif self.radar_vx_filter == "vx > 0" and self.radar_vy_filter == "vy < 0":
+                filtered_points = [p for p in point_3ds if p[3] > 0 and p[4] < 0]
+            elif self.radar_vx_filter == "vx < 0" and self.radar_vy_filter == "vy > 0":
+                filtered_points = [p for p in point_3ds if p[3] < 0 and p[4] > 0]
+            elif self.radar_vx_filter == "vx < 0" and self.radar_vy_filter == "vy < 0":
+                filtered_points = [p for p in point_3ds if p[3] < 0 and p[4] < 0]
+            elif self.radar_vx_filter == "all" and self.radar_vy_filter == "vy > 0":
+                filtered_points = [p for p in point_3ds if p[4] > 0]
+            elif self.radar_vx_filter == "all" and self.radar_vy_filter == "vy < 0":
+                filtered_points = [p for p in point_3ds if p[4] < 0]
+            elif self.radar_vx_filter == "vx < 0" and self.radar_vy_filter == "all":
+                filtered_points = [p for p in point_3ds if p[3] < 0]
+            elif self.radar_vx_filter == "vx > 0" and self.radar_vy_filter == "all":
+                filtered_points = [p for p in point_3ds if p[3] > 0]
+            elif self.radar_vx_filter == "all" and self.radar_vy_filter == "all":
+                filtered_points = point_3ds.copy()  # 不過濾，保留所有雷達點
 
+            filter_radar.append([np.array(filtered_points), boxes, ids, image])
 
+        self.saved_filter_optimize_data = filter_radar
+        print(f"雷達點過濾完成")
 
 
     def radar_filter(self, radar_pc, radar_obj):

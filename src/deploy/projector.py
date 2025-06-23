@@ -154,6 +154,7 @@ class Projector(QMainWindow):
         
         transform_group.setLayout(transform_layout)
         
+        # Auto Calibration
         # Optimization buttons
         self.optimize_buttons = {}
         auto_calib_group = QGroupBox("Auto Calibration")
@@ -169,6 +170,28 @@ class Projector(QMainWindow):
 
         self.optimize_buttons["start_optimize"] = QPushButton("開始優化")
         self.optimize_buttons["start_optimize"].clicked.connect(lambda: self.send_action("optimize"))
+
+        # vx/vy filter selection
+        vx_filter_label = QLabel("雷達 vx :")
+        self.vx_filter_combo = QComboBox()
+        self.vx_filter_combo.addItems(["all", "vx > 0", "vx < 0"])
+        self.vx_filter_combo.currentTextChanged.connect(lambda: self.send_action("filter_changed"))
+
+        vy_filter_label = QLabel("雷達 vy:")
+        self.vy_filter_combo = QComboBox()
+        self.vy_filter_combo.addItems(["all", "vy > 0", "vy < 0"])
+        self.vy_filter_combo.currentTextChanged.connect(lambda: self.send_action("filter_changed"))
+
+        # 相機物件偵測filter
+        camera_filter_x_label = QLabel("相機偵測(左右):")
+        self.camera_filter_x_combo = QComboBox()
+        self.camera_filter_x_combo.addItems(["all", "left", "right"])
+        self.camera_filter_x_combo.currentTextChanged.connect(lambda: self.send_action("filter_changed"))
+
+        camera_filter_y_label = QLabel("相機偵測(上下):")
+        self.camera_filter_y_combo = QComboBox()
+        self.camera_filter_y_combo.addItems(["all", "up", "down"])
+        self.camera_filter_y_combo.currentTextChanged.connect(lambda: self.send_action("filter_changed"))
 
         # Method selection
         method_label = QLabel("選擇優化方法:")
@@ -192,6 +215,16 @@ class Projector(QMainWindow):
         auto_calib_layout.addWidget(self.optimize_buttons["record_stop"], 10, 1)
         auto_calib_layout.addWidget(self.optimize_buttons["clear"], 11, 0)
         auto_calib_layout.addWidget(self.optimize_buttons["start_optimize"], 11, 1)
+
+        auto_calib_layout.addWidget(vx_filter_label, 12, 0)
+        auto_calib_layout.addWidget(self.vx_filter_combo, 12, 1)
+        auto_calib_layout.addWidget(vy_filter_label, 13, 0)
+        auto_calib_layout.addWidget(self.vy_filter_combo, 13, 1)
+        auto_calib_layout.addWidget(camera_filter_x_label, 14, 0)
+        auto_calib_layout.addWidget(self.camera_filter_x_combo, 14, 1)
+        auto_calib_layout.addWidget(camera_filter_y_label, 15, 0)
+        auto_calib_layout.addWidget(self.camera_filter_y_combo, 15, 1)
+
         auto_calib_group.setLayout(auto_calib_layout)
 
         # Action buttons
@@ -385,10 +418,14 @@ class Projector(QMainWindow):
     def send_action(self, action):
         method = self.method_combo.currentText()
         sample_interval = self.sample_interval.text()
-        payload = json.dumps([action, method, sample_interval])
+        vx_filter = self.vx_filter_combo.currentText()
+        vy_filter = self.vy_filter_combo.currentText()
+        camera_filter_x = self.camera_filter_x_combo.currentText()
+        camera_filter_y = self.camera_filter_y_combo.currentText()
+        payload = json.dumps([action, method, sample_interval, vx_filter, vy_filter, camera_filter_x, camera_filter_y])
         msg = String(data=payload)
         self.optimize_action_pub.publish(msg)
-        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}")
+        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, vx: {vx_filter}, vy: {vy_filter}, camera([up/down], [left/right]): {camera_filter_x, camera_filter_y}")
 
 
     def save_calibration(self):

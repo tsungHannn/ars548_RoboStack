@@ -1,0 +1,47 @@
+task: detection
+
+# num_classes: 80
+# remap_mscoco_category: True
+num_classes: 5
+remap_mscoco_category: False
+
+train_dataloader: 
+  type: DataLoader
+  dataset: 
+    type: CocoDetection
+    # img_folder: ./dataset/coco/train2017/
+    # img_folder: /media/mvclab/HDD/coco_datasets/coco/images/train2017
+    img_folder: /media/mvclab/HDD/ncsist/2025/datasets/train
+    radar_folder: /media/mvclab/HDD/ncsist/2025/datasets/radar
+    # ann_file: ./dataset/coco/annotations/instances_train2017.json
+    # ann_file: /media/mvclab/HDD/coco_datasets/coco/annotations/instances_train2017.json
+    ann_file: /media/mvclab/HDD/ncsist/2025/datasets/train/_annotations.coco.json
+    sample_ratio: 1
+    transforms:
+      type: Compose
+      ops: ~
+  shuffle: True
+  batch_size: 1
+  num_workers: 10
+  drop_last: True 
+
+
+val_dataloader:
+  type: DataLoader
+  dataset: 
+    type: CocoDetection
+    # img_folder: ./dataset/coco/val2017/
+    # img_folder: /media/mvclab/HDD/coco_datasets/coco/images/val2017
+    img_folder: /media/mvclab/HDD/ncsist/2025/datasets/valid
+    radar_folder: /media/mvclab/HDD/ncsist/2025/datasets/radar
+    # ann_file: ./dataset/coco/annotations/instances_val2017.json
+    # ann_file: /media/mvclab/HDD/coco_datasets/coco/annotations/instances_val2017.json
+    ann_file: /media/mvclab/HDD/ncsist/2025/datasets/valid/_annotations.coco.json
+    transforms:
+      type: Compose
+      ops: ~ 
+
+  shuffle: False
+  batch_size: 64
+  num_workers: 10
+  drop_last: False

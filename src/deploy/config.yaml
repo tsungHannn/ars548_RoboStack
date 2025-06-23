@@ -1,5 +1,5 @@
 camera_topic: /aravis_cam/image_color
-radar_topic: /radar_filter
+radar_topic: /radar/point_cloud_object
 echo_topic: /traffic_echo
 track_topic: /traffic_track
 radar_project_topic: /traffic_radar_project
@@ -11,7 +11,11 @@ radar_track_enabled: false
 optimize: true
 model_enabled: true
 model:
+  modality: camera
   path: yolo11m.pt
+  config_path: configs/rtdetr/rtdetr_r50vd_6x_coco.yml
+  checkpoint_path: configs/checkpoints/num_class_5__remap_mscoco_False.pth
+  conf_thresh: 0.5
   classes:
   - 1
   - 2

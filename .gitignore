@@ -2,3 +2,5 @@ camera_det/
 *.mp4
 output/
 B_place_14/
+*.pth
+B_place_14.zip

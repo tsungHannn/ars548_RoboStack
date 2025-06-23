@@ -1,3 +1,6 @@
+# 使用YOLO先偵測物體，並將結果儲存為txt檔案
+# 之後透過Roboflow調整物件框(調整誤偵測、補上沒偵測到的物件)
+
 import os
 import cv2
 from ultralytics import YOLO

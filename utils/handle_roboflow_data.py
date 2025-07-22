@@ -10,7 +10,7 @@ import shutil
 from tqdm import tqdm
 
 # 設定檔案路徑
-coco_json_path = '/media/mvclab/HDD/ncsist/2025/datasets/valid/_annotations.coco.json'  # 請替換成實際路徑
+coco_json_path = '/media/mvclab/HDD/ncsist/2025/datasets/valid/_annotations.coco.json'  # 替換成實際路徑
 original_root = '/media/mvclab/HDD/ncsist/2025/data/rosbag2kitti_結果/'  # 各場景資料夾的根目錄
 output_pcd_dir = '/media/mvclab/HDD/ncsist/2025/datasets/radar'  # 轉存目錄
 

@@ -18,11 +18,14 @@ import cv2
 import torch
 import os
 import numpy as np
+# 設定numpy seed
+np.random.seed(42)
+
 from ultralytics import YOLO
 from scipy.optimize import minimize, Bounds
 from scipy.spatial.transform import Rotation
-from pynput import keyboard
-from pynput.keyboard import Controller, Key
+from tqdm import tqdm
+
 
 # import keyboard
 import threading
@@ -107,9 +110,18 @@ class TrafficMonitor():
         # cv2.namedWindow('traffic_monitor', cv2.WINDOW_NORMAL)
 
         # self.extrinsic_matrix 是一個list
-        self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy()
-        self.original_extrinsic_matrix = self.extrinsic_matrix.copy() # 為了顯示初始外參的投影結果
+        self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
+        
+        # # 用隨機參數作為外參
+        # self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
+        # print("隨機初始化外參矩陣:", self.extrinsic_matrix)
+        # print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
+        
 
+
+
+        self.original_extrinsic_matrix = self.extrinsic_matrix.copy() # 為了顯示初始外參的投影結果
+        print('-'*20)
         if self.config.model_enabled:
             if self.config.model.modality == 'camera': # 相機物件偵測(YOLO)
                 self.model = YOLO(self.config.model.path)
@@ -160,9 +172,10 @@ class TrafficMonitor():
             self.frame_count = 0
 
             # 自動校正時的過濾條件
-            self.radar_vx_filter = 'all'
+            self.optimize_filter = 'all' # 自動化校正的時候，向左的雷達點只跟向左的物件框做優化
+            self.radar_vx_filter = 'all' # 雷達點的vx過濾條件(只留下vx > 0的點)
             self.radar_vy_filter = 'all'
-            self.camera_filter_x = 'all'
+            self.camera_filter_x = 'all' # 相機物件框的x軸過濾條件(只留下x > 0的框)
             self.camera_filter_y = 'all'
 
             # 把參數(quat)變成外參
@@ -170,10 +183,10 @@ class TrafficMonitor():
 
             # self.extrinsic_matrix = self.new_extrisics_matrix.copy()
 
-            w, h = self.config.camera.width, self.config.camera.height
+            self.image_width, self.image_height = self.config.camera.width, self.config.camera.height
             fps = 30
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            self.video_writer = cv2.VideoWriter('output.mp4', fourcc, fps, (w, h)) # 優化過程影片
+            self.video_writer = cv2.VideoWriter('output.mp4', fourcc, fps, (self.image_width, self.image_height)) # 優化過程影片
             self.optimize_history = [] # 儲存優化過程的參數
 
             # 可視化
@@ -386,27 +399,27 @@ class TrafficMonitor():
             points = np.hstack(track).astype(np.int32).reshape((-1, 1, 2))
             # cv2.polylines(annotated_frame, [points], isClosed=False, color=(230, 230, 230), thickness=10) # 移動軌跡
 
-            # 加上文字標籤：track ID + 類別名稱
-            class_name = self.model.names[cls_id] if cls_id >= 0 else "unknown"
-            text = f'{class_name} ID:{track_id}'
+            # # 加上文字標籤：track ID + 類別名稱
+            # class_name = self.model.names[cls_id] if cls_id >= 0 else "unknown"
+            # text = f'{class_name} ID:{track_id}'
 
-            # 計算文字尺寸，取得文字框座標
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1
-            font_thickness = 2
-            text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
-            text_width, text_height = text_size
+            # # 計算文字尺寸，取得文字框座標
+            # font = cv2.FONT_HERSHEY_SIMPLEX
+            # font_scale = 1
+            # font_thickness = 2
+            # text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
+            # text_width, text_height = text_size
 
-            # 畫綠色背景框
-            bg_x1 = x1
-            bg_y1 = y1 - text_height - 10
-            bg_x2 = x1 + text_width + 6
-            bg_y2 = y1
-            cv2.rectangle(annotated_frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color=(0, 255, 0), thickness=-1)
+            # # 畫綠色背景框
+            # bg_x1 = x1
+            # bg_y1 = y1 - text_height - 10
+            # bg_x2 = x1 + text_width + 6
+            # bg_y2 = y1
+            # cv2.rectangle(annotated_frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color=(0, 255, 0), thickness=-1)
 
 
-            cv2.putText(annotated_frame, text, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
+            # cv2.putText(annotated_frame, text, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+            #             font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
             
         return boxes, track_ids, class_ids, annotated_frame
     
@@ -512,8 +525,8 @@ class TrafficMonitor():
         # points = points[np.logical_and(v > 1.0, points[:, 3] < 0)]
         # points = points[np.logical_and(v > 1.0, points[:, 3] > 0)]
 
-        points = points[(v > 2.0)]
-        # points = points[np.logical_and(v > 2.0, dist < 100)]
+        # points = points[(v > 2.0)]
+        points = points[np.logical_and(v > 2.0, dist < 100)]
         points_2d = project_points(points[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
 
         # make radar points boxes and update tracker
@@ -655,7 +668,8 @@ class TrafficMonitor():
         # rospy.loginfo(f'Flow: {self.current_stats.flow}, Mean Speed: {np.mean(self.all_speeds):.2f} km/h')
         
         # draw center line
-        cv2.line(frame, (0, self.center_y), (frame.shape[1], self.center_y), (0, 0, 255), 2)
+        # cv2.line(frame, (0, self.center_y), (frame.shape[1], self.center_y), (0, 0, 255), 2)
+
         return frame
     
     def time_check(self, stamp):
@@ -679,16 +693,18 @@ class TrafficMonitor():
             action = command[0]
             method = command[1]
             sample_interval = command[2]
-            vx_filter = command[3] 
-            vy_filter = command[4]
-            camera_filter_x = command[5]
-            camera_filter_y = command[6]
+            optimize_filter = command[3]
+            vx_filter = command[4] 
+            vy_filter = command[5]
+            camera_filter_x = command[6]
+            camera_filter_y = command[7]
         except Exception as e:
             rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             return
         
         self.optimize_method = method
         self.sampling_interval = int(sample_interval)
+        self.optimize_filter = optimize_filter
         self.radar_vx_filter = vx_filter
         self.radar_vy_filter = vy_filter
         self.camera_filter_x = camera_filter_x
@@ -709,6 +725,7 @@ class TrafficMonitor():
                 # 依條件過濾
                 self.filter_object()
                 
+
                 # print(self.saved_optimize_data)
                 # print(self.saved_filter_optimize_data)
                 self.vis_thread_running = True
@@ -716,6 +733,14 @@ class TrafficMonitor():
                 self.vis_thread.start()
                 # threading.Thread(target=self.vis_recorded_data, daemon=True).start()
                 # self.replay_recorded = True
+        elif action == 'calculate_initial_extrinsic':
+            # 嘗試使用軌跡一致性估計初始外參
+            self.vis_thread_running = False
+            self.extrinsic_matrix = self.find_initial_rotation()
+
+            self.vis_thread_running = True
+            self.vis_thread = threading.Thread(target=self.vis_recorded_data, daemon=True)
+            self.vis_thread.start()
         elif action == 'clear':
             self.saved_optimize_data.clear()
             self.saved_filter_optimize_data.clear()
@@ -739,41 +764,81 @@ class TrafficMonitor():
 
         rospy.loginfo("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_filter_optimize_data))
         while not rospy.is_shutdown() and len(self.saved_filter_optimize_data) > 0 and self.vis_thread_running:
-            for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(self.saved_filter_optimize_data):
+            for idx, (points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image) in enumerate(self.saved_filter_optimize_data):
+                if self.vis_thread_running is False:
+                    break  # 停止視覺化線程
                 vis_img = image.copy()
 
                 # 繪製物件框
-                for box in bboxes:
+                for box, tid in zip(bboxes, bboxes_id):
                     cx, cy, w, h = box
                     x1, y1 = int(cx - w / 2), int(cy - h / 2)
                     x2, y2 = int(cx + w / 2), int(cy + h / 2)
-                    cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    if tid in right_ids: 
+                        cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3) # 向右物件框 (綠色)
+                    elif tid in left_ids:
+                        cv2.rectangle(vis_img, (x1, y1), (x2, y2), (255, 0, 255), 3) # 向左物件框 (紫色)
+                        # cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3) # 向左物件框 (綠色)
                     # cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)
 
                 if len(points_3d) != 0:
                     projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
-                    for pt in projected:
+                    for idx, pt in enumerate(projected):
                         x, y = pt
-                        cv2.circle(vis_img, (int(x), int(y)), 15, (255, 0, 0), -1)
+                        vy = points_3d[idx, 4]  # vy 來自原始雷達點
+                        
+                        if vy > 0: # 向左
+                            cv2.circle(vis_img, (int(x), int(y)), 20, (255, 0, 0), -1)  # 向左雷達點 (藍色)
+                        elif vy < 0: # 向右
+                            cv2.circle(vis_img, (int(x), int(y)), 20, (0, 255, 255), -1) # 向右雷達點 (黃色)
+                            # cv2.circle(vis_img, (int(x), int(y)), 20, (255, 0, 0), -1) # 向右雷達點 (藍色)
 
                 vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
                 self.visualize_pub.publish(vis_msg)
                 rospy.sleep(0.1)  # 控制 FPS
 
-    def compute_loss(self, proj_pts, bboxes, image=None, visualize=False):
+    def compute_loss(self, extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=None, visualize=False):
         loss = 0.0
         vis_img = image.copy() if visualize and image is not None else None
 
         distances = []  # 用於統計距離分布
         valid_distances = []  # 用於計算有效的損失
+        results = []  # [(pt_int, closest_center, min_dist, vy)] # 可視化用
 
-        for pt in proj_pts:
+        proj_pts = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+
+        # 點出所有框的中心點
+        for box, tid in zip(bboxes, bboxes_id):
+            cx, cy, w, h = box
+            if tid in right_ids:
+                cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)  # 相機物件中心向右點 (綠點)
+            elif tid in left_ids:
+                cv2.circle(vis_img, (int(cx), int(cy)), 15, (255, 0, 255), -1) # 相機物件中心向左點 (紫點)
+
+
+        for idx, pt in enumerate(proj_pts):
             x, y = pt
+            vy = points_3d[idx, 4]  # vy 來自原始雷達點
+
+            # 根據 vy 決定方向
+            if vy > 0:
+                valid_ids = left_ids
+            elif vy < 0:
+                valid_ids = right_ids
+            else:
+                continue  # vy=0 不計算
+
+            # 找此方向下的可用box
+            matched_boxes = [box for box, tid in zip(bboxes, bboxes_id) if tid in valid_ids]
+
+            if not matched_boxes:
+                continue  # 此方向無box
+
+            # 找距離最近的中心
             min_dist = float('inf')
             closest_center = None
-
-            for box in bboxes:
-                cx, cy, w, h = box  # cx, cy 是框中心
+            for box in matched_boxes:
+                cx, cy, w, h = box
                 dist = np.sqrt((x - cx)**2 + (y - cy)**2)
                 if dist < min_dist:
                     min_dist = dist
@@ -781,31 +846,102 @@ class TrafficMonitor():
 
             distances.append(min_dist)
 
-            if visualize and vis_img is not None and closest_center is not None:
-                pt_int = (int(x), int(y))
-                # 判斷是否為有效距離
-                if min_dist <= np.median(distances) + 1.5 * np.std(distances):
-                    cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 紅線 - 有效距離
-                else:
-                    cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)  # 綠線 - 忽略距離
-                cv2.circle(vis_img, pt_int, 15, (255, 0, 0), -1)  # 藍點（雷達投影）
-                cv2.circle(vis_img, closest_center, 15, (0, 255, 0), -1)  # 綠點（框中心）
+
+            results.append(((int(x), int(y)), closest_center, min_dist, vy))
+
+            # if visualize and vis_img is not None and closest_center is not None:
+            #     pt_int = (int(x), int(y))
+            #     if min_dist <= np.median(left_distances) + 1.5 * np.std(left_distances):
+            #         cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)
+            #     else:
+            #         cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)
+                
+            #     if vy > 0: # 向左
+            #         cv2.circle(vis_img, pt_int, 20, (255, 0, 0), -1)  # 向左雷達點 (藍色)
+            #     elif vy < 0: # 向右
+            #         cv2.circle(vis_img, pt_int, 20, (0, 255, 255), -1) # 向右雷達點 (黃色)
+
+                
+                # cv2.circle(vis_img, closest_center, 20, (255, 255, 0), -1)
+
+
+
+        # for pt in proj_pts:
+        #     x, y = pt
+        #     min_dist = float('inf')
+        #     closest_center = None
+
+        #     for box in bboxes:
+        #         cx, cy, w, h = box  # cx, cy 是框中心
+        #         dist = np.sqrt((x - cx)**2 + (y - cy)**2)
+        #         if dist < min_dist:
+        #             min_dist = dist
+        #             closest_center = (int(cx), int(cy))
+
+        #     distances.append(min_dist)
+
+        #     if visualize and vis_img is not None and closest_center is not None:
+        #         pt_int = (int(x), int(y))
+        #         # 判斷是否為有效距離
+        #         if min_dist <= np.median(distances) + 1.5 * np.std(distances):
+        #             cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 紅線 - 有效距離
+        #         else:
+        #             cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)  # 綠線 - 忽略距離
+        #         cv2.circle(vis_img, pt_int, 20, (255, 0, 0), -1)  # 藍點（雷達投影）
+        #         cv2.circle(vis_img, closest_center, 20, (0, 255, 0), -1)  # 綠點（框中心）
+
+        # if len(distances) > 0:
+        #     median_dist = np.median(distances)
+        #     std_dist = np.std(distances)
+
+        #     for dist in distances:
+        #         # 過濾掉距離過遠的點（雜點）
+        #         if dist <= median_dist + 1 * std_dist:
+        #             valid_distances.append(dist)
+
+        #     for pt_int, closest_center, min_dist, vy in results:
+        #         if visualize and vis_img is not None:
+        #             if min_dist <= median_dist + 1 * std_dist:
+        #                 cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 有效距離：紅
+        #             else:
+        #                 cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)  # 離群：綠
+
+        #             if vy > 0: # 向左
+        #                 cv2.circle(vis_img, pt_int, 20, (255, 0, 0), -1)  # 向左雷達點 (藍色)
+        #             elif vy < 0: # 向右
+        #                 cv2.circle(vis_img, pt_int, 20, (0, 255, 255), -1) # 向右雷達點 (黃色)
+                    
 
         if len(distances) > 0:
-            median_dist = np.median(distances)
-            std_dist = np.std(distances)
+            q1 = np.percentile(distances, 25)
+            q3 = np.percentile(distances, 75)
+            iqr = q3 - q1
+            outlier_k = 1.5  # 通常使用1.5倍IQR
+            lower_bound = q1 - outlier_k * iqr
+            upper_bound = q3 + outlier_k * iqr
 
             for dist in distances:
-                # 過濾掉距離過遠的點（雜點）
-                if dist <= median_dist + 1.5 * std_dist:
+                if lower_bound <= dist <= upper_bound:
                     valid_distances.append(dist)
+
+            for pt_int, closest_center, min_dist, vy in results:
+                if visualize and vis_img is not None:
+                    if lower_bound <= min_dist <= upper_bound:
+                        cv2.line(vis_img, pt_int, closest_center, (0, 0, 255), 2)  # 有效距離：紅
+                    else:
+                        cv2.line(vis_img, pt_int, closest_center, (0, 255, 0), 2)  # 離群：綠
+
+                    if vy > 0: # 向左
+                        cv2.circle(vis_img, pt_int, 20, (255, 0, 0), -1)  # 向左雷達點 (藍色)
+                    elif vy < 0: # 向右
+                        cv2.circle(vis_img, pt_int, 20, (0, 255, 255), -1) # 向右雷達點 (黃色)
+
+
 
         # 計算損失：使用有效距離平均值
         loss = np.mean(valid_distances) if len(valid_distances) > 0 else float('inf')
 
-        for box in bboxes:
-            cx, cy, w, h = box
-            cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)  # 綠點（框中心
+        
 
         if visualize and vis_img is not None:
             vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img)
@@ -817,7 +953,6 @@ class TrafficMonitor():
 
 
 
-
     def batch_optimization_loss(self, extrinsic_param_quat, saved_data, visualize=False):
         # qx, qy, qz, qw, tx, ty, tz = extrinsics_param
         normalized_param = self.normalize_quaternion(extrinsic_param_quat)
@@ -825,10 +960,11 @@ class TrafficMonitor():
 
         total_loss = 0.0
 
-        for idx, (points_3d, bboxes, bboxes_id, image) in enumerate(saved_data):
-            projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+        for idx, (points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image) in enumerate(saved_data):
+            # projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
 
-            loss = self.compute_loss(projected, bboxes, image=image, visualize=visualize)
+            
+            loss = self.compute_loss(extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=image, visualize=visualize)
             total_loss += loss
 
 
@@ -909,6 +1045,245 @@ class TrafficMonitor():
         
         return transformation_matrix
 
+    
+
+    def find_initial_rotation(self):
+        """
+        嘗試多組旋轉角度，尋找能讓最多雷達點落在影像範圍內的旋轉矩陣
+        """
+        max_score = 0
+        max_cos_similarity = -1
+        max_left_cos_similarity = -1
+        max_right_cos_similarity = -1
+        best_rotation = np.eye(3)
+        cos_similarities = []
+
+        # 嘗試多組歐拉角（旋轉向量）
+        candidate_angles = np.linspace(-np.pi, np.pi, 40)
+        points_3d = np.concatenate([data[0] for data in self.saved_filter_optimize_data], axis=0)  # 合併所有3D點
+
+        # 建立左右 mask
+        road_mask_left = np.zeros((self.image_height, self.image_width), dtype=np.uint8)
+        road_mask_right = np.zeros((self.image_height, self.image_width), dtype=np.uint8)
+
+        # 雷達點分左右群體
+        # pts_2d_left_all = []
+        # pts_2d_right_all = []
+
+        pts_3d_left_all = []
+        pts_3d_right_all = []
+
+        for points_3d_frame, _, _, _, _, _, _, _ in self.saved_filter_optimize_data:
+            vy_frame = points_3d_frame[:, 4]
+
+            left_mask_frame = vy_frame > 0
+            right_mask_frame = vy_frame < 0
+
+            if np.any(left_mask_frame):
+                pts_3d_left_all.append(points_3d_frame[left_mask_frame])
+            if np.any(right_mask_frame):
+                pts_3d_right_all.append(points_3d_frame[right_mask_frame])
+
+        # 計算相機群體軌跡
+        cam_left_pts = []
+        cam_right_pts = []
+
+        
+        # # 先統計每個 track_id 是向左還是向右
+        track_directions = {}  # tid -> 'left'/'right'
+
+        track_history = {}
+        track_directions = {}  # tid -> 'left'/'right'
+
+        for radarPoint, boxes, ids, up_ids, down_ids, left_ids, right_ids, image in self.saved_filter_optimize_data:
+            for box, track_id in zip(boxes, ids):
+                if track_id is None:
+                    continue
+                cx, cy, w, h = box
+                x1, y1 = int(cx - w/2), int(cy - h/2)
+                x2, y2 = int(cx + w/2), int(cy + h/2)
+                if track_id not in track_history:
+                    track_history[track_id] = []
+                track_history[track_id].append((float(cx), float(cy)))
+                if track_id in right_ids:
+                    track_directions[track_id] = 'right'
+                    cv2.rectangle(road_mask_right, (x1, y1), (x2, y2), color=1, thickness=-1)
+                elif track_id in left_ids:
+                    track_directions[track_id] = 'left'
+                    cv2.rectangle(road_mask_left, (x1, y1), (x2, y2), color=1, thickness=-1)
+
+
+        for rx in tqdm(candidate_angles):
+            for ry in candidate_angles:
+                for rz in candidate_angles:
+                    R = Rotation.from_euler('xyz', [rx, ry, rz]).as_matrix()
+                    T = np.zeros(3)
+                    extrinsic = np.eye(4)
+                    extrinsic[:3, :3] = R
+                    extrinsic[:3, 3] = T
+
+                    # 投影所有3D雷達點
+                    proj_pts = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic)
+                    proj_pts_int = np.round(proj_pts).astype(np.int32)
+
+                    # 過濾掉畫面外的點
+                    valid_mask = (proj_pts_int[:, 0] >= 0) & (proj_pts_int[:, 0] < self.image_width) & \
+                                (proj_pts_int[:, 1] >= 0) & (proj_pts_int[:, 1] < self.image_height)
+                    proj_pts_valid = proj_pts_int[valid_mask]
+                    vy_valid = points_3d[valid_mask, 4]
+
+                    if len(proj_pts_valid) == 0:
+                        continue
+                    
+
+                    # 計算 inliers (雷達落在正確區域的點數)
+                    left_idx = vy_valid > 0
+                    right_idx = vy_valid < 0
+                    pts_left = proj_pts_valid[left_idx]
+                    pts_right = proj_pts_valid[right_idx]
+
+                    inliers_left = np.sum(road_mask_left[pts_left[:, 1], pts_left[:, 0]]) if len(pts_left) > 0 else 0
+                    inliers_right = np.sum(road_mask_right[pts_right[:, 1], pts_right[:, 0]]) if len(pts_right) > 0 else 0
+
+                    number_score = min(inliers_left, inliers_right)
+
+                    if number_score == 0:
+                        continue
+
+                    
+
+                    if len(pts_3d_left_all) > 0:
+                        pts_3d_left_all = np.vstack(pts_3d_left_all)
+                    if len(pts_3d_right_all) > 0:
+                        pts_3d_right_all = np.vstack(pts_3d_right_all)
+
+                    pts_2d_left_all = project_points(pts_3d_left_all[:, :3], self.config.camera.camera_matrix, extrinsic)
+                    pts_2d_right_all = project_points(pts_3d_right_all[:, :3], self.config.camera.camera_matrix, extrinsic)
+
+
+                    # 使用cv2.fitLine擬合向左群體軌跡向量
+                    if pts_2d_left_all is not None and len(pts_2d_left_all) >= 2:
+                        [vx, vy, _, _] = cv2.fitLine(pts_2d_left_all.astype(np.float32), cv2.DIST_L2, 0, 0.01, 0.01)
+                        radar_left_vec = np.array([vx, vy])
+                        radar_left_vec *= -1  # 向左點的向量需要反向
+                    else:
+                        radar_left_vec = None
+
+                    # 使用cv2.fitLine擬合向右群體軌跡向量
+                    if pts_2d_right_all is not None and len(pts_2d_right_all) >= 2:
+                        [vx, vy, _, _] = cv2.fitLine(pts_2d_right_all.astype(np.float32), cv2.DIST_L2, 0, 0.01, 0.01)
+                        radar_right_vec = np.array([vx, vy])
+                    else:
+                        radar_right_vec = None
+
+                    radar_left_vec = radar_left_vec.flatten() if radar_left_vec is not None else None
+                    radar_right_vec = radar_right_vec.flatten() if radar_right_vec is not None else None
+
+
+                    # 計算相機群體軌跡
+                    cam_left_pts, cam_right_pts = [], []
+                    for tid, centers in track_history.items():
+                        if len(centers) < 2:
+                            continue
+                        start, end = np.array(centers[0]), np.array(centers[-1])
+                        if tid in left_ids:
+                            cam_left_pts.append(end - start)
+                        elif tid in right_ids:
+                            cam_right_pts.append(end - start)
+
+                    cam_left_vec = np.mean(cam_left_pts, axis=0) if cam_left_pts else None
+                    cam_right_vec = np.mean(cam_right_pts, axis=0) if cam_right_pts else None
+
+                    # 計算方向一致性
+                    def calc_cos_sim(v1, v2):
+                        if v1 is None or v2 is None or np.linalg.norm(v1) < 1e-6 or np.linalg.norm(v2) < 1e-6:
+                            return 0.0
+                        return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+
+
+                    cos_sim_left = calc_cos_sim(radar_left_vec, cam_left_vec)
+                    cos_sim_right = calc_cos_sim(radar_right_vec, cam_right_vec)
+                    # mean_cos_sim = (cos_sim_left + cos_sim_right) / 2 # 平均
+                    mean_cos_sim = np.sqrt(cos_sim_left * cos_sim_right) # 幾何平均
+
+                    
+                    score = number_score * mean_cos_sim # 考慮餘弦相似度加權
+
+                    # score = number_score  # 只考慮點數
+                    # 更新最佳旋轉
+                    if score > max_score:
+                        max_score = score
+                        max_left_cos_similarity = cos_sim_left
+                        max_right_cos_similarity = cos_sim_right
+                        max_cos_similarity = mean_cos_sim
+                        best_rotation = R
+
+
+                    visualize = False
+                    if visualize:
+                        # 可視化
+                        if len(self.saved_filter_optimize_data) > 0:
+                            # 用第一幀影像作背景
+                            vis_img = self.saved_filter_optimize_data[0][7].copy()
+                        else:
+                            vis_img = np.zeros((self.image_height, self.image_width, 3), dtype=np.uint8)
+
+                        # 將道路mask畫到背景上
+                        mask_left_vis = np.zeros_like(vis_img)
+                        mask_right_vis = np.zeros_like(vis_img)
+                        mask_left_vis[road_mask_left == 1] = (255, 0, 255)  # 紫色區域=左
+                        mask_right_vis[road_mask_right == 1] = (0, 255, 0)  # 綠色區域=右
+                        overlay_mask = cv2.addWeighted(mask_left_vis, 0.7, mask_right_vis, 0.3, 0)
+                        vis_img = cv2.addWeighted(vis_img, 0.7, overlay_mask, 0.3, 0)
+
+                        # 畫所有雷達點
+                        if pts_2d_left_all is not None:
+                            for pt in pts_2d_left_all:
+                                x, y = int(pt[0]), int(pt[1])
+                                cv2.circle(vis_img, (x, y), 4, (255, 0, 0), -1)  # 藍色=向左點
+
+                        if pts_2d_right_all is not None:
+                            for pt in pts_2d_right_all:
+                                x, y = int(pt[0]), int(pt[1])
+                                cv2.circle(vis_img, (x, y), 4, (0, 255, 255), -1)  # 黃色=向右點
+
+                        # 畫相機群體軌跡箭頭
+                        if cam_left_vec is not None:
+                            p0 = (self.image_width//2, self.image_height//2)
+                            p1 = (int(p0[0] + cam_left_vec[0]*50), int(p0[1] + cam_left_vec[1]*50))
+                            cv2.arrowedLine(vis_img, p0, p1, (255, 0, 255), 5, tipLength=0.2)  # 紫色=相機向左
+
+                        if cam_right_vec is not None:
+                            p0 = (self.image_width//2, self.image_height//2)
+                            p1 = (int(p0[0] + cam_right_vec[0]*50), int(p0[1] + cam_right_vec[1]*50))
+                            cv2.arrowedLine(vis_img, p0, p1, (0, 255, 0), 5, tipLength=0.2)  # 綠色=相機向右
+
+                        # 畫雷達群體軌跡箭頭
+                        if radar_left_vec is not None:
+                            p0 = (self.image_width//2, self.image_height//2)
+                            p1 = (int(p0[0] + radar_left_vec[0]*100), int(p0[1] + radar_left_vec[1]*50))
+                            cv2.arrowedLine(vis_img, p0, p1, (255, 0, 0), 5, tipLength=0.2)  # 藍色=雷達向左
+
+                        if radar_right_vec is not None:
+                            p0 = (self.image_width//2, self.image_height//2)
+                            p1 = (int(p0[0] + radar_right_vec[0]*100), int(p0[1] + radar_right_vec[1]*50))
+                            cv2.arrowedLine(vis_img, p0, p1, (0, 255, 255), 5, tipLength=0.2)  # 黃色=雷達向右
+
+                        # 發布到ROS
+                        vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
+                        self.visualize_pub.publish(vis_msg)
+                        # rospy.sleep(0.0005)  # 控制FPS
+
+
+
+
+        print(f"初始旋轉估計完成，最佳投影點數: {max_score}, 最大餘弦相似度: {max_cos_similarity:.4f}, 左向餘弦相似度: {max_left_cos_similarity:.4f}, 右向餘弦相似度: {max_right_cos_similarity:.4f}")
+        extrinsic = np.eye(4)
+        extrinsic[:3, :3] = best_rotation
+        extrinsic[:3, 3] = np.zeros(3)
+        return extrinsic
+    
+
 
     def process_sensor_data(self, timer):
         rospy.loginfo_once('Processing sensor data')
@@ -957,7 +1332,7 @@ class TrafficMonitor():
         self.flow_stats(objects)
 
         fusion_frame = self.vis_traffic_result(radar_frame.copy(), objects)
-        camera_detection = self.vis_traffic_result(frame.copy(), objects)
+        # camera_detection = self.vis_traffic_result(frame.copy(), objects)
         # self.pub_radar_project.publish(self.to_image_msg(fusion_frame, stamp))
 
         # 自動化校正
@@ -975,7 +1350,9 @@ class TrafficMonitor():
                 self.vis_thread.join()
             
             rotation_bounds = [(-1, 1)] * 4
-            translation_bounds = [(-10, 10)] * 3
+            # translation_bounds = [(-10, 10)] * 3
+            translation_bounds = [(-0.5, 0.5), (-5, 5), (-0.5, 0.5)]
+            
             bounds = rotation_bounds + translation_bounds
             # rx, ry, rz, tx, ty, tz = self.extrinsic_param
             # rx, ry, rz = np.radians([rx, ry, rz]) # 修改成弧度
@@ -985,7 +1362,7 @@ class TrafficMonitor():
             # init_extrinsic_param_quat = self.extrinsic_param_quat.copy()
             self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
 
-
+            
             print("開始優化, method:", self.optimize_method)
             result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
                             args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
@@ -1025,7 +1402,7 @@ class TrafficMonitor():
             
             
         # final result
-        final_frame = frame.copy()
+        # final_frame = frame.copy()
         # final_frame = self.vis_objects(radar_frame, objects)
 
         # 改成顯示優化後外參結果
@@ -1050,12 +1427,14 @@ class TrafficMonitor():
     def filter_object(self, movement_threshold=3.0, min_frames=3):
         """
         根據 track_id 的中心移動距離，過濾每幀中靜止的物件框
+        將向左、向右的物件框分別存進 self.saved_filtered_optimize_data
+        self.saved_filtered_optimized_data = [[points_3d, boxes, ids, up_ids, down_ids, left_ids, right_ids, image], ...] 
         """
         print("正在過濾靜止物件框...")
 
         # 建立每個 track_id 對應的中心點軌跡
         track_history = {}
-        # self.saved_optimize_data: [[points_3d, boxes, ids, image], ...]
+
 
         for radarPoint, boxes, ids, _ in self.saved_optimize_data:
             for box, track_id in zip(boxes, ids):
@@ -1152,7 +1531,7 @@ class TrafficMonitor():
                     if track_id in right_ids and track_id in down_ids:
                         new_boxes.append(box)
                         new_ids.append(track_id)
-            filtered_camera.append([points_3d, new_boxes, new_ids, image])
+            filtered_camera.append([points_3d, new_boxes, new_ids, up_ids, down_ids, left_ids, right_ids, image])
 
         self.saved_filter_optimize_data = filtered_camera
         print("靜止框過濾完成。")
@@ -1161,7 +1540,7 @@ class TrafficMonitor():
         # 過濾雷達點
         filter_radar = []
         filtered_points = []
-        for point_3ds, boxes, ids, image in filtered_camera:
+        for point_3ds, boxes, ids, up_ids, down_ids, left_ids, right_ids, image in filtered_camera:
             if self.radar_vx_filter == "vx > 0" and self.radar_vy_filter == "vy > 0":
                 filtered_points = [p for p in point_3ds if p[3] > 0 and p[4] > 0]
             elif self.radar_vx_filter == "vx > 0" and self.radar_vy_filter == "vy < 0":
@@ -1181,7 +1560,7 @@ class TrafficMonitor():
             elif self.radar_vx_filter == "all" and self.radar_vy_filter == "all":
                 filtered_points = point_3ds.copy()  # 不過濾，保留所有雷達點
 
-            filter_radar.append([np.array(filtered_points), boxes, ids, image])
+            filter_radar.append([np.array(filtered_points), boxes, ids, up_ids, down_ids, left_ids, right_ids, image])
 
         self.saved_filter_optimize_data = filter_radar
         print(f"雷達點過濾完成")

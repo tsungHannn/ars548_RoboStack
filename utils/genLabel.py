@@ -11,7 +11,7 @@ import shutil
 from tqdm import tqdm
 
 # 設定參數
-scene_path = "/media/mvclab/HDD/ncsist/2025/data/rosbag2kitti_結果/B_place/7_2025-02-26-10-44-20"  # 圖片資料夾
+scene_path = "/media/mvclab/HDD/ncsist/2025/data/rosbag2kitti_結果/20250701/B_place/2_2025-07-01-20-49-07"  # 圖片資料夾
 image_folder = os.path.join(scene_path, "png")  # 圖片資料夾
 output_folder = os.path.join(scene_path, "pre_label")  # 存放偵測結果的資料夾
 model_path = "src/deploy/yolo11m.pt"  # 可換成 yolov8s.pt、yolov8m.pt、yolov8l.pt 等

@@ -13,7 +13,7 @@ from tqdm import tqdm
 from natsort import natsorted
 
 # === 路徑與 topic 名稱 ===
-bag_path = "/media/mvclab/HDD/ncsist/2025/data/B_place"
+bag_path = "/media/mvclab/HDD/ncsist/2025/data/20250701/B_place"
 # bag_path = "/media/mvclab/HDD/ncsist/2025/data/A_place/1_2025-02-26-10-13-51.bag"
 output_path = os.path.join("output", bag_path[-7:])
 output_pcd_dir = "pcd"

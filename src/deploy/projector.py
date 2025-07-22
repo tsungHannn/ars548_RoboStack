@@ -165,6 +165,13 @@ class Projector(QMainWindow):
         self.optimize_buttons["record_stop"] = QPushButton("停止錄製")
         self.optimize_buttons["record_stop"].clicked.connect(lambda: self.send_action("record_stop"))
 
+        self.optimize_filter_combo = QComboBox()
+        self.optimize_filter_combo.addItems(["左右", "上下", "不限"])
+        self.optimize_filter_combo.currentTextChanged.connect(lambda: self.send_action("filter_changed"))
+
+        self.optimize_buttons["initial_extrinsic"] = QPushButton("計算初始外參")
+        self.optimize_buttons["initial_extrinsic"].clicked.connect(lambda: self.send_action("calculate_initial_extrinsic"))
+
         self.optimize_buttons["clear"] = QPushButton("清除片段")
         self.optimize_buttons["clear"].clicked.connect(lambda: self.send_action("clear"))
 
@@ -207,23 +214,35 @@ class Projector(QMainWindow):
         # self.sample_rate_input.setFixedWidth(100)
         # self.sample_interval.editingFinished.connect(self.update_sample_rate)
 
-        auto_calib_layout.addWidget(method_label, 8, 0)
-        auto_calib_layout.addWidget(sample_interval_label, 8, 1)
-        auto_calib_layout.addWidget(self.method_combo, 9, 0)
-        auto_calib_layout.addWidget(self.sample_interval, 9, 1)
-        auto_calib_layout.addWidget(self.optimize_buttons["record_start"], 10, 0)
-        auto_calib_layout.addWidget(self.optimize_buttons["record_stop"], 10, 1)
-        auto_calib_layout.addWidget(self.optimize_buttons["clear"], 11, 0)
-        auto_calib_layout.addWidget(self.optimize_buttons["start_optimize"], 11, 1)
+        row_count = 8
+        auto_calib_layout.addWidget(method_label, row_count, 0)
+        auto_calib_layout.addWidget(sample_interval_label, row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(self.method_combo, row_count, 0)
+        auto_calib_layout.addWidget(self.sample_interval, row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(self.optimize_buttons["record_start"], row_count, 0)
+        auto_calib_layout.addWidget(self.optimize_buttons["record_stop"], row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(self.optimize_filter_combo, row_count, 0)
+        auto_calib_layout.addWidget(self.optimize_buttons["initial_extrinsic"], row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(self.optimize_buttons["clear"], row_count, 0)
+        auto_calib_layout.addWidget(self.optimize_buttons["start_optimize"], row_count, 1)
+        row_count += 1
 
-        auto_calib_layout.addWidget(vx_filter_label, 12, 0)
-        auto_calib_layout.addWidget(self.vx_filter_combo, 12, 1)
-        auto_calib_layout.addWidget(vy_filter_label, 13, 0)
-        auto_calib_layout.addWidget(self.vy_filter_combo, 13, 1)
-        auto_calib_layout.addWidget(camera_filter_x_label, 14, 0)
-        auto_calib_layout.addWidget(self.camera_filter_x_combo, 14, 1)
-        auto_calib_layout.addWidget(camera_filter_y_label, 15, 0)
-        auto_calib_layout.addWidget(self.camera_filter_y_combo, 15, 1)
+        auto_calib_layout.addWidget(vx_filter_label, row_count, 0)
+        auto_calib_layout.addWidget(self.vx_filter_combo, row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(vy_filter_label, row_count, 0)
+        auto_calib_layout.addWidget(self.vy_filter_combo, row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(camera_filter_x_label, row_count, 0)
+        auto_calib_layout.addWidget(self.camera_filter_x_combo, row_count, 1)
+        row_count += 1
+        auto_calib_layout.addWidget(camera_filter_y_label, row_count, 0)
+        auto_calib_layout.addWidget(self.camera_filter_y_combo, row_count, 1)
+        row_count += 1
 
         auto_calib_group.setLayout(auto_calib_layout)
 
@@ -418,14 +437,15 @@ class Projector(QMainWindow):
     def send_action(self, action):
         method = self.method_combo.currentText()
         sample_interval = self.sample_interval.text()
+        optimize_filter = self.optimize_filter_combo.currentText()
         vx_filter = self.vx_filter_combo.currentText()
         vy_filter = self.vy_filter_combo.currentText()
         camera_filter_x = self.camera_filter_x_combo.currentText()
         camera_filter_y = self.camera_filter_y_combo.currentText()
-        payload = json.dumps([action, method, sample_interval, vx_filter, vy_filter, camera_filter_x, camera_filter_y])
+        payload = json.dumps([action, method, sample_interval, optimize_filter, vx_filter, vy_filter, camera_filter_x, camera_filter_y])
         msg = String(data=payload)
         self.optimize_action_pub.publish(msg)
-        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, vx: {vx_filter}, vy: {vy_filter}, camera([up/down], [left/right]): {camera_filter_x, camera_filter_y}")
+        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 自動化校正方向: {optimize_filter}, vx: {vx_filter}, vy: {vy_filter}, camera([up/down], [left/right]): {camera_filter_x, camera_filter_y}")
 
 
     def save_calibration(self):

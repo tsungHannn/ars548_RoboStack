@@ -4,3 +4,5 @@ output/
 B_place_14/
 *.pth
 B_place_14.zip
+yolo11l.pt
+yolo11x.pt

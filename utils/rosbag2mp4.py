@@ -10,8 +10,8 @@ from sensor_msgs.msg import CompressedImage
 from tqdm import tqdm
 
 # === 使用者參數 ===
-bag_path = "/media/mvclab/HDD/ncsist/2025/data/A_place/"  # ROS bag 檔案路徑
-bag_file = "5_2025-02-26-10-17-23.bag"  # ROS bag 檔案名稱
+bag_path = "/media/mvclab/HDD/ncsist/2025/data/20250701/A_place/"  # ROS bag 檔案路徑
+bag_file = "3_2025-07-01-21-50-32.bag"  # ROS bag 檔案名稱
 image_topic = "/aravis_cam/image_color/compressed"  # Image topic 名稱
 output_video = bag_file[:-4] + ".mp4"  # 輸出的 MP4 檔案名稱
 fps = 20  # 預設影格率

@@ -109,13 +109,13 @@ class TrafficMonitor():
         self.data = State()
         # cv2.namedWindow('traffic_monitor', cv2.WINDOW_NORMAL)
 
-        # self.extrinsic_matrix 是一個list
-        self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
+        # # self.extrinsic_matrix 是一個list
+        # self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
         
-        # # 用隨機參數作為外參
-        # self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
-        # print("隨機初始化外參矩陣:", self.extrinsic_matrix)
-        # print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
+        # 用隨機參數作為外參
+        self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
+        print("隨機初始化外參矩陣:", self.extrinsic_matrix)
+        print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
         
 
 
@@ -1204,6 +1204,8 @@ class TrafficMonitor():
                     cos_sim_left = calc_cos_sim(radar_left_vec, cam_left_vec)
                     cos_sim_right = calc_cos_sim(radar_right_vec, cam_right_vec)
                     # mean_cos_sim = (cos_sim_left + cos_sim_right) / 2 # 平均
+                    if cos_sim_left < 0 or cos_sim_right < 0:
+                        continue
                     mean_cos_sim = np.sqrt(cos_sim_left * cos_sim_right) # 幾何平均
 
                     
@@ -1334,6 +1336,20 @@ class TrafficMonitor():
         fusion_frame = self.vis_traffic_result(radar_frame.copy(), objects)
         # camera_detection = self.vis_traffic_result(frame.copy(), objects)
         # self.pub_radar_project.publish(self.to_image_msg(fusion_frame, stamp))
+
+
+        # 專題生可以改這邊
+        # ======================================================
+        # 碰撞檢測 -> 有車輛距離、速度之後，計算TTR(Time-to-Reach)，如果小於一個閥值就觸發警報
+
+
+
+
+        # ======================================================
+
+
+
+
 
         # 自動化校正
         # 優化外參

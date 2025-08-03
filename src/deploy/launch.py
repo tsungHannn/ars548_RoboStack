@@ -39,7 +39,7 @@ def start_tmux_session(args):
     
     subprocess.run(['tmux', 'new-window', '-t', 'ros:', '-n', 'bag_record'])
     subprocess.run(['tmux', 'send-keys', '-t', f'ros:{len(commands)+1}', f'{pre_command}', 'C-m'])
-    cmd = 'rosbag record --duration 1m /aravis_cam/image_color/compressed -e "/radar/(.*)" -o ~/bags/1.bag'
+    cmd = 'rosbag record --duration 30 /aravis_cam/image_color/compressed -e "/radar/(.*)" -o ~/bags/1.bag'
     subprocess.run(['tmux', 'send-keys', '-t', f'ros:{len(commands)+1}', f'{cmd}'])
 
     # Attach to the tmux session

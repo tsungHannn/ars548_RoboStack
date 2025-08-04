@@ -8,7 +8,9 @@ from collections import defaultdict
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from rclpy.qos import QoSProfile
 
+import rclpy.time
 from std_msgs.msg import Float32MultiArray, String
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from visualization_msgs.msg import MarkerArray, Marker
@@ -17,6 +19,7 @@ from geometry_msgs.msg import Pose, Point, Vector3, Quaternion
 from cv_bridge import CvBridge
 # from ros_numpy import numpify
 from ros2_numpy import numpify
+from ros2_numpy.point_cloud2 import point_cloud2_to_array
 
 import message_filters
 # import sensor_msgs.point_cloud2 as pc2
@@ -29,6 +32,7 @@ import os
 import numpy as np
 # 設定numpy seed
 np.random.seed(42)
+import time
 
 from ultralytics import YOLO
 from scipy.optimize import minimize, Bounds
@@ -77,7 +81,7 @@ class State:
     camera: Image = None
     radar: PointCloud2 = None
     track_history = defaultdict(lambda: [])
-    last_stamp: rclpy.Time = None
+    last_stamp: rclpy.time = None
 
 @dataclass
 class Detection:
@@ -97,6 +101,7 @@ class TrafficStats:
 class TrafficMonitor(Node):
     def __init__(self, config_path='config.yaml'):
         # rospy.init_node('traffic_monitor')
+        rclpy.init()
         super().__init__('traffic_monitor')
         self.setup_parameters(config_path)
         self.setup_topics()
@@ -114,20 +119,20 @@ class TrafficMonitor(Node):
         self.config = yaml_to_object(config_path)
 
         # rospy.loginfo(self.config)
-        self.get_logger().info(self.config)
+        self.get_logger().info(f'Loaded config: {self.config}')
         
 
         self.cv_bridge = CvBridge()
         self.data = State()
         # cv2.namedWindow('traffic_monitor', cv2.WINDOW_NORMAL)
 
-        # # self.extrinsic_matrix 是一個list
-        # self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
+        # self.extrinsic_matrix 是一個list
+        self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
         
-        # 用隨機參數作為外參
-        self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
-        print("隨機初始化外參矩陣:", self.extrinsic_matrix)
-        print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
+        # # 用隨機參數作為外參
+        # self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
+        # print("隨機初始化外參矩陣:", self.extrinsic_matrix)
+        # print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
         
 
 
@@ -239,13 +244,16 @@ class TrafficMonitor(Node):
         # _ = rospy.Subscriber(self.config.camera_topic, Image, self.camera_callback)
         # _ = rospy.Subscriber(self.config.radar_topic, PointCloud2, self.radar_callback)
         # _ = rospy.Timer(rospy.Duration(1.0 / self.config.fps), self.process_sensor_data)
-        _ = self.create_subscription(Image, self.config.camera_topic, self.camera_callback)
-        _ = self.create_subscription(PointCloud2, self.config.radar_topic, self.radar_callback)
+
+        _ = self.create_subscription(Image, self.config.camera_topic, self.camera_callback, 1)
+        _ = self.create_subscription(PointCloud2, self.config.radar_topic, self.radar_callback, 1)
         _ = self.create_timer(1.0 / self.config.fps, self.process_sensor_data)
 
 
-        self.radar_pc = message_filters.Subscriber('/radar/point_cloud_object', PointCloud2)
-        self.radar_obj = message_filters.Subscriber('/radar/object_list', ObjectList) # ARS548 object_list
+        # self.radar_pc = message_filters.Subscriber(self, '/radar/point_cloud_object', PointCloud2)
+        # self.radar_obj = message_filters.Subscriber(self, '/radar/object_list', ObjectList) # ARS548 object_list
+        self.radar_pc = message_filters.Subscriber(self, PointCloud2, '/radar/point_cloud_object')
+        self.radar_obj = message_filters.Subscriber(self, ObjectList, '/radar/object_list') # ARS548 object_list
         self.sync = message_filters.ApproximateTimeSynchronizer([self.radar_pc, self.radar_obj], queue_size=1, slop=0.1)
         self.sync.registerCallback(self.radar_filter)
         
@@ -341,8 +349,8 @@ class TrafficMonitor(Node):
                 type=Marker.LINE_STRIP,
                 action=Marker.ADD,
                 pose=Pose(
-                    position=Point(x=0, y=0, z=0.1),
-                    orientation=Quaternion(x=0, y=0, z=0, w=1.0)
+                    position=Point(x=0.0, y=0.0, z=0.1),
+                    orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
                 ),
                 scale=Vector3(x=0.5, y=0.1, z=0.1),
                 color=ColorRGBA(r=0.0, g=0.0, b=1.0, a=1.0)
@@ -355,8 +363,8 @@ class TrafficMonitor(Node):
                 y=math.sin(rotate) * 300 + math.cos(rotate) * 0
             ))
             range_marker.points.append(Point(
-                x=0 + radar_transform[0],
-                y=0 + radar_transform[1]
+                x=0.0 + radar_transform[0],
+                y=0.0 + radar_transform[1]
             ))
 
             rotate = 60 * math.pi / 180.0 + radar_transform[2]
@@ -459,8 +467,10 @@ class TrafficMonitor(Node):
     # 雷達+相機物件偵測
     def detect_object_with_radar(self, image, radar_msg):
 
-        data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
-        points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32)
+        # data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
+        # points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32)
+        data = pc2.read_points_numpy(radar_msg, field_names=['x','y','z','vx','vy'])
+        points = np.array(data, dtype=np.float32) # (n, 5) [x, y, z, vx, vy]
 
         # Step 1: 預處理        
         if isinstance(image, np.ndarray):
@@ -546,9 +556,12 @@ class TrafficMonitor(Node):
 
 
     def radar_to_image(self, radar_msg, frame, extrinsic_matrix):
-        data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
-        # points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy', 'id', 'cls']], axis=1, dtype=np.float32) # (n, 5)
-        points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32) # (n, 5)
+        # data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
+        # data = point_cloud2_to_array(radar_msg)
+        data = pc2.read_points_numpy(radar_msg, field_names=['x','y','z','vx','vy'])
+        points = np.array(data, dtype=np.float32) # (n, 5) [x, y, z, vx, vy]
+
+        # points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32) # (n, 5)
         # fix z to 1
         points[:, 2] = 1
         # v = vx + vy
@@ -712,7 +725,9 @@ class TrafficMonitor(Node):
         return frame
     
     def time_check(self, stamp):
-        if self.data.last_stamp is not None and abs(stamp.to_sec() - self.data.last_stamp.to_sec()) > 1:
+        stamp_time = rclpy.time.Time.from_msg(stamp)
+        last_stamp_time = rclpy.time.Time.from_msg(self.data.last_stamp) if self.data.last_stamp is not None else None
+        if self.data.last_stamp is not None and abs((stamp_time - last_stamp_time).nanoseconds * 1e-9) > 1:
             self.reset()
         self.data.last_stamp = stamp
     
@@ -805,7 +820,7 @@ class TrafficMonitor(Node):
             return
 
         # rospy.loginfo("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_filter_optimize_data))
-        self.get_logger().info("開始循環播放已儲存的資料...共有 %d 幀", len(self.saved_filter_optimize_data))
+        self.get_logger().info(f"開始循環播放已儲存的資料...共有 {len(self.saved_filter_optimize_data)} 幀")
 
         # while not rospy.is_shutdown() and len(self.saved_filter_optimize_data) > 0 and self.vis_thread_running:
         while rclpy.ok() and len(self.saved_filter_optimize_data) > 0 and self.vis_thread_running:
@@ -841,7 +856,7 @@ class TrafficMonitor(Node):
                 vis_msg = self.cv_bridge.cv2_to_imgmsg(vis_img, encoding="bgr8")
                 self.visualize_pub.publish(vis_msg)
                 # rospy.sleep(0.1)  # 控制 FPS
-                rclpy.spin_once(self, timeout_sec=0.1)  # 控制 FPS
+                time.sleep(0.1)  # 控制 FPS
 
     def compute_loss(self, extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=None, visualize=False):
         loss = 0.0
@@ -1333,7 +1348,7 @@ class TrafficMonitor(Node):
     
 
 
-    def process_sensor_data(self, timer):
+    def process_sensor_data(self):
         # rospy.loginfo_once('Processing sensor data')
         # time_start = rospy.Time.now()
         # if not self.data.camera:
@@ -1351,7 +1366,7 @@ class TrafficMonitor(Node):
             return
         if not self.data.radar:
             self.get_logger().warn('Missing radar data')
-
+            return
 
         
         # if self.cvInit == False:
@@ -1723,9 +1738,9 @@ class TrafficMonitor(Node):
                         text = f"x:{x:.1f}, y:{y:.1f}\nvx:{vx:.2f}\nvy:{vy:.2f}",
                         pose=Pose(
                             position=Point(x=obj.u_position_x, y=obj.u_position_y, z=obj.u_position_z),
-                            orientation=Quaternion(x=0, y=0, z=1)
+                            orientation=Quaternion(x=0.0, y=0.0, z=1.0)
                         ),
-                        scale=Vector3(x=2, y=2, z=2),
+                        scale=Vector3(x=2.0, y=2.0, z=2.0),
                         color=ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0),
                     )
                     markers.markers.append(text_marker)
@@ -1735,14 +1750,23 @@ class TrafficMonitor(Node):
         # header.stamp = rospy.Time.now()
         header.stamp = radar_obj.header.stamp
         header.frame_id = radar_pc.header.frame_id
+        # fields = [
+        #     PointField('x', 0, PointField.FLOAT32, 1),
+        #     PointField('y', 4, PointField.FLOAT32, 1),
+        #     PointField('z', 8, PointField.FLOAT32, 1),
+        #     PointField('vx', 12, PointField.FLOAT32, 1),
+        #     PointField('vy', 16, PointField.FLOAT32, 1),
+        #     PointField('id', 20, PointField.FLOAT32, 1),
+        #     PointField('cls', 24, PointField.FLOAT32, 1)
+        # ]
         fields = [
-            PointField('x', 0, PointField.FLOAT32, 1),
-            PointField('y', 4, PointField.FLOAT32, 1),
-            PointField('z', 8, PointField.FLOAT32, 1),
-            PointField('vx', 12, PointField.FLOAT32, 1),
-            PointField('vy', 16, PointField.FLOAT32, 1),
-            PointField('id', 20, PointField.FLOAT32, 1),
-            PointField('cls', 24, PointField.FLOAT32, 1)
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='vx', offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name='vy', offset=16, datatype=PointField.FLOAT32, count=1),
+            PointField(name='id', offset=20, datatype=PointField.FLOAT32, count=1),
+            PointField(name='cls', offset=24, datatype=PointField.FLOAT32, count=1)
         ]
         point_cloud_filter = pc2.create_cloud(header, fields, radar_point_filter)
         
@@ -1751,13 +1775,21 @@ class TrafficMonitor(Node):
         # header.stamp = rospy.Time.now()
         header.stamp = radar_obj.header.stamp
         header.frame_id = radar_pc.header.frame_id
+        # fields = [
+        #     PointField('x', 0, PointField.FLOAT32, 1),
+        #     PointField('y', 4, PointField.FLOAT32, 1),
+        #     PointField('z', 8, PointField.FLOAT32, 1),
+        #     PointField('vx', 12, PointField.FLOAT32, 1),
+        #     PointField('vy', 16, PointField.FLOAT32, 1),
+        #     PointField('id', 20, PointField.FLOAT32, 1),
+        # ]
         fields = [
-            PointField('x', 0, PointField.FLOAT32, 1),
-            PointField('y', 4, PointField.FLOAT32, 1),
-            PointField('z', 8, PointField.FLOAT32, 1),
-            PointField('vx', 12, PointField.FLOAT32, 1),
-            PointField('vy', 16, PointField.FLOAT32, 1),
-            PointField('id', 20, PointField.FLOAT32, 1),
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='vx', offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name='vy', offset=16, datatype=PointField.FLOAT32, count=1),
+            PointField(name='id', offset=20, datatype=PointField.FLOAT32, count=1),
         ]
         point_cloud_xyz_vxvy_id = pc2.create_cloud(header, fields, radar_point_xyz_vxvy_id)
 
@@ -1779,7 +1811,7 @@ if __name__ == '__main__':
 
     try:
         monitor = TrafficMonitor()
-        rclpy.spin()
+        rclpy.spin(monitor)
     except KeyboardInterrupt:
         monitor.get_logger().info('KeyboardInterrupt, shutting down node')
     finally:

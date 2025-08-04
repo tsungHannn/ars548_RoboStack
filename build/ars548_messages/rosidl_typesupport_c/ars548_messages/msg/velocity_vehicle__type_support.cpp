@@ -1,0 +1,95 @@
+// generated from rosidl_typesupport_c/resource/idl__type_support.cpp.em
+// with input from ars548_messages:msg/VelocityVehicle.idl
+// generated code does not contain a copyright notice
+
+#include "cstddef"
+#include "rosidl_runtime_c/message_type_support_struct.h"
+#include "ars548_messages/msg/detail/velocity_vehicle__struct.h"
+#include "ars548_messages/msg/detail/velocity_vehicle__type_support.h"
+#include "rosidl_typesupport_c/identifier.h"
+#include "rosidl_typesupport_c/message_type_support_dispatch.h"
+#include "rosidl_typesupport_c/type_support_map.h"
+#include "rosidl_typesupport_c/visibility_control.h"
+#include "rosidl_typesupport_interface/macros.h"
+
+namespace ars548_messages
+{
+
+namespace msg
+{
+
+namespace rosidl_typesupport_c
+{
+
+typedef struct _VelocityVehicle_type_support_ids_t
+{
+  const char * typesupport_identifier[2];
+} _VelocityVehicle_type_support_ids_t;
+
+static const _VelocityVehicle_type_support_ids_t _VelocityVehicle_message_typesupport_ids = {
+  {
+    "rosidl_typesupport_fastrtps_c",  // ::rosidl_typesupport_fastrtps_c::typesupport_identifier,
+    "rosidl_typesupport_introspection_c",  // ::rosidl_typesupport_introspection_c::typesupport_identifier,
+  }
+};
+
+typedef struct _VelocityVehicle_type_support_symbol_names_t
+{
+  const char * symbol_name[2];
+} _VelocityVehicle_type_support_symbol_names_t;
+
+#define STRINGIFY_(s) #s
+#define STRINGIFY(s) STRINGIFY_(s)
+
+static const _VelocityVehicle_type_support_symbol_names_t _VelocityVehicle_message_typesupport_symbol_names = {
+  {
+    STRINGIFY(ROSIDL_TYPESUPPORT_INTERFACE__MESSAGE_SYMBOL_NAME(rosidl_typesupport_fastrtps_c, ars548_messages, msg, VelocityVehicle)),
+    STRINGIFY(ROSIDL_TYPESUPPORT_INTERFACE__MESSAGE_SYMBOL_NAME(rosidl_typesupport_introspection_c, ars548_messages, msg, VelocityVehicle)),
+  }
+};
+
+typedef struct _VelocityVehicle_type_support_data_t
+{
+  void * data[2];
+} _VelocityVehicle_type_support_data_t;
+
+static _VelocityVehicle_type_support_data_t _VelocityVehicle_message_typesupport_data = {
+  {
+    0,  // will store the shared library later
+    0,  // will store the shared library later
+  }
+};
+
+static const type_support_map_t _VelocityVehicle_message_typesupport_map = {
+  2,
+  "ars548_messages",
+  &_VelocityVehicle_message_typesupport_ids.typesupport_identifier[0],
+  &_VelocityVehicle_message_typesupport_symbol_names.symbol_name[0],
+  &_VelocityVehicle_message_typesupport_data.data[0],
+};
+
+static const rosidl_message_type_support_t VelocityVehicle_message_type_support_handle = {
+  rosidl_typesupport_c__typesupport_identifier,
+  reinterpret_cast<const type_support_map_t *>(&_VelocityVehicle_message_typesupport_map),
+  rosidl_typesupport_c__get_message_typesupport_handle_function,
+};
+
+}  // namespace rosidl_typesupport_c
+
+}  // namespace msg
+
+}  // namespace ars548_messages
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+const rosidl_message_type_support_t *
+ROSIDL_TYPESUPPORT_INTERFACE__MESSAGE_SYMBOL_NAME(rosidl_typesupport_c, ars548_messages, msg, VelocityVehicle)() {
+  return &::ars548_messages::msg::rosidl_typesupport_c::VelocityVehicle_message_type_support_handle;
+}
+
+#ifdef __cplusplus
+}
+#endif

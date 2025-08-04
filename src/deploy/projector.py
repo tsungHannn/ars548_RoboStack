@@ -4,15 +4,19 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                            QWidget, QPushButton, QSlider, QLabel, QCheckBox, 
                            QGroupBox, QGridLayout, QFileDialog, QComboBox, QLineEdit)
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from math import pi
 from utils import yaml_to_object
 import yaml
 
-import rospy
+# import rospy
+import rclpy # ROS2 的 rospy
+from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor
+
 from std_msgs.msg import Float32MultiArray, String
 
-class Projector(QMainWindow):
+class Projector(Node, QMainWindow):
     def __init__(self, config_path='config.yaml'):
         """
         Initialize camera projector with interactive controls.
@@ -20,15 +24,25 @@ class Projector(QMainWindow):
         Args:
             config_path (str): Path to configuration JSON file
         """
-        super().__init__()
-
-        rospy.init_node('control_panel_gui', anonymous=True)
-
-        self.matrix_pub = rospy.Publisher('/control/matrix', Float32MultiArray, queue_size=10)
-        self.optimize_action_pub = rospy.Publisher('/control/optimize_action', String, queue_size=1)
-
-        self.matrix_sub = rospy.Subscriber('/radar/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
+        # super().__init__()
+        Node.__init__(self, 'control_panel_gui')
+        QMainWindow.__init__(self)
         
+
+        # rospy.init_node('control_panel_gui', anonymous=True)
+        
+
+        # self.matrix_pub = rospy.Publisher('/control/matrix', Float32MultiArray, queue_size=10)
+        # self.optimize_action_pub = rospy.Publisher('/control/optimize_action', String, queue_size=1)
+        self.matrix_pub = self.create_publisher(Float32MultiArray, '/control/matrix', 10)
+        self.optimize_action_pub = self.create_publisher(String, '/control/optimize_action', 10)
+
+
+        # self.matrix_sub = rospy.Subscriber('/radar/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
+        self.matrix_sub = self.create_subscription(Float32MultiArray, '/radar/extrinsic_matrix', self.update_matrix_from_auto_calib, 10)
+
+
+
         # Camera parameters
         self.config_path = config_path
         self.camera_matrix = None
@@ -538,10 +552,38 @@ class Projector(QMainWindow):
 
 
 def main():
+    # app = QApplication(sys.argv)
+    # projector = Projector()
+    # projector.show()
+    # sys.exit(app.exec_())
+    # 1) 啟動 ROS 2
+    rclpy.init()
+
+    # 2) 啟動 Qt
     app = QApplication(sys.argv)
     projector = Projector()
     projector.show()
-    sys.exit(app.exec_())
+
+    # 3) 建立 ROS 2 執行器，並用 QTimer 定期 spin_once
+    executor = SingleThreadedExecutor()
+    executor.add_node(projector)
+
+    timer = QTimer()
+    timer.timeout.connect(lambda: executor.spin_once(timeout_sec=0.01))
+    timer.start(10)  # 每 10 ms 驅動一次 ROS 事件
+
+    # 4) 進入 Qt 事件迴圈
+    exit_code = app.exec_()
+
+    # 5) 清理
+    timer.stop()
+    executor.remove_node(projector)
+    projector.destroy_node()
+    rclpy.shutdown()
+
+    sys.exit(exit_code)
+
+
 
 if __name__ == "__main__":
     main()

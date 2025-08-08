@@ -10,9 +10,9 @@ import shutil
 from tqdm import tqdm
 
 # 設定檔案路徑
-coco_json_path = '/media/mvclab/HDD/ncsist/2025/datasets/valid/_annotations.coco.json'  # 替換成實際路徑
+coco_json_path = '/media/mvclab/HDD/ncsist/2025/datasets/train_test_73_with_night/train/_annotations.coco.json'  # 替換成實際路徑
 original_root = '/media/mvclab/HDD/ncsist/2025/data/rosbag2kitti_結果/'  # 各場景資料夾的根目錄
-output_pcd_dir = '/media/mvclab/HDD/ncsist/2025/datasets/radar'  # 轉存目錄
+output_pcd_dir = '/media/mvclab/HDD/ncsist/2025/datasets/train_test_73_with_night/radar'  # 轉存目錄
 
 
 # 確保目的資料夾存在
@@ -38,14 +38,16 @@ for image in tqdm(coco_data.get('images', [])):
         splited_tag = full_tag.split('_') # ['A', 'place', '1', '2025-02-26-10-13-51']
 
         scene_folder = '_'.join(splited_tag[:2])  # A_place
-        date_folder = '_'.join(splited_tag[2:])  # 1_2025-02-26-10-13-51
-
+        full_date_folder = '_'.join(splited_tag[2:])  # 1_2025-02-26-10-13-51
+        date_folder = full_date_folder.split('_')[-1]  # 2025-02-26-10-13-51
+        date_folder = date_folder.split('-')[0:3]  # 2025-02-26
+        date_folder = "".join(date_folder)  # 20250226
     except:
         print(f"[錯誤] 無法解析 user_tags: {full_tag}")
         continue
 
     pcd_file_name = os.path.splitext(orig_name)[0] + '.pcd'
-    pcd_input_path = os.path.join(original_root, scene_folder, date_folder, 'pcd', pcd_file_name)
+    pcd_input_path = os.path.join(original_root, date_folder, scene_folder, full_date_folder, 'pcd', pcd_file_name)
 
     if not os.path.exists(pcd_input_path):
         print(f"[錯誤] 找不到雷達檔案：{pcd_input_path}")

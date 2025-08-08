@@ -9,7 +9,8 @@ pre_command = ' && '.join(pre_commands)
 
 commands = [
     ('rviz2', 'rviz2 -d ./ros2_main.rviz'),
-    ('image_transport', 'ros2 run image_transport republish compressed raw --ros-args --remap in/compressed:=/aravis_cam/image_color/compressed --remap out:=/aravis_cam/image_color'),
+    # ('image_transport', 'ros2 run image_transport republish compressed raw --ros-args --remap in/compressed:=/aravis_cam/image_color/compressed --remap out:=/aravis_cam/image_color'),
+    ('image_transport', 'ros2 run image_transport republish compressed raw --ros-args -p in_transport:=compressed -p out_transport:=raw --remap in/compressed:=/aravis_cam/image_color/compressed --remap out:=/aravis_cam/image_color')
     ('main', 'python3 main_ros2.py'),
 ]
 
@@ -20,7 +21,7 @@ stream = [
 
 control = ('control', 'python3 projector.py')
 
-bag = ('ros2 bag play /media/mvclab/HDD/ncsist/2025/data/20250226/A_place/ros2_bag/ --loop --clock')
+bag = ('ros2_bag', 'ros2 bag play /media/mvclab/HDD/ncsist/2025/data/20250226/A_place/ros2_bag/ --loop --clock')
 
 def start_tmux_session(args):
     session_name = 'ros2'

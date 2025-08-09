@@ -11,7 +11,35 @@ import torch.utils.data
 import torchvision
 torchvision.disable_beta_transforms_warning()
 
-from torchvision import datapoints
+# TODO: 新版的torchvision沒有datapoints
+# from torchvision import datapoints
+try:
+    from torchvision import datapoints
+except ImportError:
+    import torch
+    
+    # 創建 datapoints 的替代實現
+    class MockDatapoints:
+        class BoundingBoxFormat:
+            XYXY = "XYXY"
+            XYWH = "XYWH"
+            CXCYWH = "CXCYWH"
+        
+        @staticmethod
+        def BoundingBox(boxes, format=None, spatial_size=None):
+            # 直接返回 tensor，保持原有功能
+            if isinstance(boxes, torch.Tensor):
+                return boxes
+            return torch.as_tensor(boxes, dtype=torch.float32)
+        
+        @staticmethod
+        def Mask(masks):
+            # 直接返回 tensor
+            if isinstance(masks, torch.Tensor):
+                return masks
+            return torch.as_tensor(masks)
+    
+    datapoints = MockDatapoints()
 
 from pycocotools import mask as coco_mask
 

@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/ars548_driver/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

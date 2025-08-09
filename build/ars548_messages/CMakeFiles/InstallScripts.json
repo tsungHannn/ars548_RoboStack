@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/ars548_messages/cmake_install.cmake",
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/ars548_messages/ars548_messages__py/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

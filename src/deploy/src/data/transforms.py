@@ -7,7 +7,86 @@ import torch.nn as nn
 
 import torchvision
 torchvision.disable_beta_transforms_warning()
-from torchvision import datapoints
+
+# TODO: 新版的torchvision沒有datapoints
+# from torchvision import datapoints
+import torchvision
+torchvision.disable_beta_transforms_warning()
+
+# 替代 torchvision datapoints 的相容性實現
+try:
+    from torchvision import datapoints
+except ImportError:
+    import torch
+    from PIL import Image
+    
+    class MockDatapoints:
+        class BoundingBoxFormat:
+            XYXY = "XYXY"
+            XYWH = "XYWH"
+            CXCYWH = "CXCYWH"
+            
+            # 為了相容性，添加 value 屬性
+            class _FormatValue:
+                def __init__(self, value):
+                    self.value = value
+                    
+                def lower(self):
+                    return self.value.lower()
+            
+            # 將格式包裝成有 value 屬性的對象
+            XYXY = _FormatValue("XYXY")
+            CXCYWH = _FormatValue("CXCYWH")
+        
+        class Image(torch.Tensor):
+            def __new__(cls, data):
+                if isinstance(data, torch.Tensor):
+                    obj = data.as_subclass(cls)
+                else:
+                    obj = torch.as_tensor(data).as_subclass(cls)
+                return obj
+        
+        class Video(torch.Tensor):
+            def __new__(cls, data):
+                if isinstance(data, torch.Tensor):
+                    obj = data.as_subclass(cls)
+                else:
+                    obj = torch.as_tensor(data).as_subclass(cls)
+                return obj
+        
+        class Mask(torch.Tensor):
+            def __new__(cls, data):
+                if isinstance(data, torch.Tensor):
+                    obj = data.as_subclass(cls)
+                else:
+                    obj = torch.as_tensor(data).as_subclass(cls)
+                return obj
+        
+        class BoundingBox(torch.Tensor):
+            def __new__(cls, data, format=None, spatial_size=None):
+                if isinstance(data, torch.Tensor):
+                    obj = data.as_subclass(cls)
+                else:
+                    obj = torch.as_tensor(data, dtype=torch.float32).as_subclass(cls)
+                
+                # 設置必要的屬性
+                obj.format = format if format is not None else MockDatapoints.BoundingBoxFormat.XYXY
+                obj.spatial_size = spatial_size
+                return obj
+            
+            def __div__(self, other):
+                # 處理除法操作
+                result = super().__truediv__(other)
+                if hasattr(self, 'format'):
+                    result.format = self.format
+                if hasattr(self, 'spatial_size'):
+                    result.spatial_size = self.spatial_size
+                return result
+            
+            def __truediv__(self, other):
+                return self.__div__(other)
+    
+    datapoints = MockDatapoints()
 
 import torchvision.transforms.v2 as T
 import torchvision.transforms.v2.functional as F
@@ -26,9 +105,121 @@ RandomZoomOut = register(T.RandomZoomOut)
 # RandomIoUCrop = register(T.RandomIoUCrop)
 RandomHorizontalFlip = register(T.RandomHorizontalFlip)
 Resize = register(T.Resize)
-ToImageTensor = register(T.ToImageTensor)
-ConvertDtype = register(T.ConvertDtype)
-SanitizeBoundingBox = register(T.SanitizeBoundingBox)
+
+# TODO: 新版的torchvision沒有這三行
+# ToImageTensor = register(T.ToImageTensor)
+# ConvertDtype = register(T.ConvertDtype)
+# SanitizeBoundingBox = register(T.SanitizeBoundingBox)
+
+# 處理 ToImageTensor 的版本相容性
+try:
+    ToImageTensor = register(T.ToImageTensor)
+except AttributeError:
+    @register
+    class ToImageTensor(T.Transform):
+        def __init__(self):
+            super().__init__()
+        
+        def forward(self, *inputs):
+            if len(inputs) == 1:
+                img = inputs[0]
+                if isinstance(img, Image.Image):
+                    return F.to_tensor(img)
+                return img
+            else:
+                outputs = []
+                for inp in inputs:
+                    if isinstance(inp, Image.Image):
+                        outputs.append(F.to_tensor(inp))
+                    else:
+                        outputs.append(inp)
+                return tuple(outputs)
+
+# 處理 ConvertDtype 的版本相容性
+try:
+    ConvertDtype = register(T.ConvertDtype)
+except AttributeError:
+    @register
+    class ConvertDtype(T.Transform):
+        def __init__(self, dtype=torch.float32, scale=False):
+            super().__init__()
+            self.dtype = dtype
+            self.scale = scale
+        
+        def forward(self, *inputs):
+            if len(inputs) == 1:
+                img = inputs[0]
+                if isinstance(img, torch.Tensor):
+                    if self.scale and img.dtype == torch.uint8:
+                        return img.to(self.dtype) / 255.0
+                    else:
+                        return img.to(self.dtype)
+                return img
+            else:
+                outputs = []
+                for inp in inputs:
+                    if isinstance(inp, torch.Tensor):
+                        if self.scale and inp.dtype == torch.uint8:
+                            outputs.append(inp.to(self.dtype) / 255.0)
+                        else:
+                            outputs.append(inp.to(self.dtype))
+                    else:
+                        outputs.append(inp)
+                return tuple(outputs)
+
+# 處理 SanitizeBoundingBox 的版本相容性
+try:
+    SanitizeBoundingBox = register(T.SanitizeBoundingBox)
+except AttributeError:
+    @register
+    class SanitizeBoundingBox(T.Transform):
+        def __init__(self, min_size=1.0, labels_getter="default"):
+            super().__init__()
+            self.min_size = min_size
+            self.labels_getter = labels_getter
+        
+        def forward(self, *inputs):
+            if len(inputs) == 2:
+                img, target = inputs
+                if isinstance(target, dict) and 'boxes' in target:
+                    boxes = target['boxes']
+                    if len(boxes) > 0:
+                        # 移除無效的 bounding boxes
+                        valid_boxes = []
+                        valid_indices = []
+                        for i, box in enumerate(boxes):
+                            x1, y1, x2, y2 = box
+                            if x2 > x1 + self.min_size and y2 > y1 + self.min_size:
+                                valid_boxes.append(box)
+                                valid_indices.append(i)
+                        
+                        if len(valid_boxes) > 0:
+                            target['boxes'] = torch.stack(valid_boxes)
+                            # 如果有labels，也要對應過濾
+                            if 'labels' in target:
+                                target['labels'] = target['labels'][valid_indices]
+                            # 如果有masks，也要對應過濾
+                            if 'masks' in target:
+                                target['masks'] = target['masks'][valid_indices]
+                        else:
+                            # 沒有有效的 boxes
+                            target['boxes'] = torch.empty((0, 4), dtype=torch.float32)
+                            if 'labels' in target:
+                                target['labels'] = torch.empty((0,), dtype=torch.int64)
+                            if 'masks' in target:
+                                target['masks'] = torch.empty((0, *img.shape[-2:]), dtype=torch.uint8)
+                
+                return img, target
+            else:
+                return inputs if len(inputs) > 1 else inputs[0]
+
+
+
+
+
+
+
+
 RandomCrop = register(T.RandomCrop)
 Normalize = register(T.Normalize)
 

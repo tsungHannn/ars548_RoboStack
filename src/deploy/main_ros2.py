@@ -18,8 +18,8 @@ from std_msgs.msg import Header, ColorRGBA
 from geometry_msgs.msg import Pose, Point, Vector3, Quaternion
 from cv_bridge import CvBridge
 # from ros_numpy import numpify
-from ros2_numpy import numpify
-from ros2_numpy.point_cloud2 import point_cloud2_to_array
+# from ros2_numpy import numpify
+# from ros2_numpy.point_cloud2 import point_cloud2_to_array
 
 import message_filters
 # import sensor_msgs.point_cloud2 as pc2
@@ -29,6 +29,7 @@ from sensor_msgs_py import point_cloud2 as pc2
 import cv2
 import torch
 import os
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE' # 在WINDOWS上跑要用的
 import numpy as np
 # 設定numpy seed
 np.random.seed(42)
@@ -244,10 +245,14 @@ class TrafficMonitor(Node):
         # _ = rospy.Subscriber(self.config.camera_topic, Image, self.camera_callback)
         # _ = rospy.Subscriber(self.config.radar_topic, PointCloud2, self.radar_callback)
         # _ = rospy.Timer(rospy.Duration(1.0 / self.config.fps), self.process_sensor_data)
+        
 
         _ = self.create_subscription(Image, self.config.camera_topic, self.camera_callback, 1)
         _ = self.create_subscription(PointCloud2, self.config.radar_topic, self.radar_callback, 1)
         _ = self.create_timer(1.0 / self.config.fps, self.process_sensor_data)
+        self.camera_last_stamp = None
+        self.radar_last_stamp = None
+
 
 
         # self.radar_pc = message_filters.Subscriber(self, '/radar/point_cloud_object', PointCloud2)
@@ -322,9 +327,11 @@ class TrafficMonitor(Node):
     def camera_callback(self, image_msg: Image):
         self.data.camera = image_msg
         self.camera_id += 1
+        self.camera_last_stamp = self.get_clock().now()  # 更新相機時間戳
     
     def radar_callback(self, radar_msg: PointCloud2):
         self.data.radar = radar_msg
+        self.radar_last_stamp = self.get_clock().now()  # 更新雷達時間戳
     
     def to_image_msg(self, image, stamp=None):
         if stamp is None:
@@ -1367,7 +1374,14 @@ class TrafficMonitor(Node):
         if not self.data.radar:
             self.get_logger().warn('Missing radar data')
             return
-
+        
+        # 資料同步
+        if self.camera_last_stamp is None or self.radar_last_stamp is None:
+            return
+        if abs(self.camera_last_stamp.nanoseconds - self.radar_last_stamp.nanoseconds) * 1e-9 > 0.1 :  # 超過0.1s
+            self.get_logger().warn('Camera and radar data are not synchronized, skipping this frame')
+            # print(abs(self.camera_last_stamp.nanoseconds - self.radar_last_stamp.nanoseconds))
+            return
         
         # if self.cvInit == False:
         #     cv2.namedWindow("traffic_monitor", cv2.WINDOW_NORMAL)
@@ -1799,7 +1813,7 @@ class TrafficMonitor(Node):
         self.pub_radar_marker.publish(markers)
 
 if __name__ == '__main__':
-    print(torch.cuda.is_available())
+    print("cuda_available:", torch.cuda.is_available())
     # try:
     #     monitor = TrafficMonitor()
     #     rospy.spin()

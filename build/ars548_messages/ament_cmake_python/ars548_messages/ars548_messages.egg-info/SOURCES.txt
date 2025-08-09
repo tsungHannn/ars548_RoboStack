@@ -1,6 +1,0 @@
-setup.py
-ars548_messages/__init__.py
-ars548_messages.egg-info/PKG-INFO
-ars548_messages.egg-info/SOURCES.txt
-ars548_messages.egg-info/dependency_links.txt
-ars548_messages.egg-info/top_level.txt

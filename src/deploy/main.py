@@ -194,6 +194,11 @@ class TrafficMonitor():
             self.vis_thread_running = False # 持續撥放已經儲存的片段
             self.vis_thread = threading.Thread(target=self.vis_recorded_data, daemon=True)
 
+
+            self.radar_trajectory = set() # 儲存雷達點的軌跡，用set是因為要去除重複點
+            self.show_radar_trajectory = False # 是否顯示雷達軌跡
+
+
             # print("原始外參:", self.extrinsic_matrix)
             # print("原始參數(Euler):", self.quaternion_to_euler(self.extrinsic_param_quat))
             # print("原始參數(Quaternion):", self.extrinsic_param_quat)
@@ -698,6 +703,7 @@ class TrafficMonitor():
             vy_filter = command[5]
             camera_filter_x = command[6]
             camera_filter_y = command[7]
+            show_radar_trajectory = command[8]
         except Exception as e:
             rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             return
@@ -750,6 +756,9 @@ class TrafficMonitor():
         elif action == 'optimize':
             print("開始優化")
             self.optimize = True
+        elif action == 'radar_trajectory':
+            self.show_radar_trajectory = show_radar_trajectory
+            self.get_logger().info("顯示雷達軌跡: " + str(self.show_radar_trajectory))
             
 
 
@@ -1323,10 +1332,24 @@ class TrafficMonitor():
             boxes, ids, class_ids = [], [], []
             radar_frame = frame.copy()
         
+
+        if self.show_radar_trajectory:
+            # 顯示雷達點的軌跡
+            radar_trajectory_2d = project_points(np.array(list(self.radar_trajectory))[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
+            for pt in radar_trajectory_2d:
+                x, y = pt
+                if 0 <= x < self.image_width and 0 <= y < self.image_height:
+                    cv2.circle(track_frame, (int(x), int(y)), 10, (0, 255, 255), -1)
+
+
         # process radar
         # points_3d: 雷達3D點，[x, y, z, vx, vy]
         points_3d, points_2d, radar_tracks, radar_frame = self.radar_to_image(radar_msg, track_frame, self.extrinsic_matrix)
         original_points_3d, original_points_2d, original_radar_tracks, original_radar_frame = self.radar_to_image(radar_msg, frame.copy(), self.original_extrinsic_matrix)
+        
+        for point in points_3d:
+            self.radar_trajectory.add(tuple(point))
+
         
 
         # fuse radar points and bounding boxes

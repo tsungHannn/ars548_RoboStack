@@ -67,6 +67,8 @@ class ProjectorGUI:
         self.trans_var = tk.DoubleVar(value=self.cali_scale_trans)
         self.method_var = tk.StringVar(value="Nelder-Mead")
         self.sample_interval_var = tk.StringVar(value="1")
+
+        self.show_radar_trajectory = tk.BooleanVar(value=False) # 顯示雷達軌跡
         
         # Filter variables
         self.optimize_filter_var = tk.StringVar(value="不限")
@@ -127,6 +129,11 @@ class ProjectorGUI:
         transform_frame = ttk.LabelFrame(scrollable_frame, text="Transformation Controls", padding=10)
         transform_frame.pack(fill=tk.X, padx=10, pady=5)
         
+        # 顯示雷達軌跡
+        checkbox_frame = ttk.Frame(transform_frame)
+        checkbox_frame.pack(fill=tk.X, pady=5)
+        ttk.Checkbutton(checkbox_frame, text="顯示雷達軌跡", variable=self.show_radar_trajectory, command=lambda: self.send_action("radar_trajectory")).pack(side=tk.LEFT)
+
         # Rotation section
         rotation_frame = ttk.LabelFrame(transform_frame, text="Rotation", padding=5)
         rotation_frame.pack(fill=tk.X, pady=5)
@@ -142,7 +149,7 @@ class ProjectorGUI:
         
         for i, (text, command) in enumerate(rot_buttons):
             ttk.Button(rotation_frame, text=text, command=command, width=8).grid(
-                row=i//3, column=i%3, padx=3, pady=3, sticky=tk.EW)
+                row=i//2, column=i%2, padx=2, pady=2, sticky=tk.EW)
         
         # Translation section
         translation_frame = ttk.LabelFrame(transform_frame, text="Translation", padding=5)
@@ -159,9 +166,9 @@ class ProjectorGUI:
         
         for i, (text, command) in enumerate(trans_buttons):
             ttk.Button(translation_frame, text=text, command=command, width=8).grid(
-                row=i//3, column=i%3, padx=3, pady=3, sticky=tk.EW)
+                row=i//2, column=i%2, padx=2, pady=2, sticky=tk.EW)
         
-        for i in range(3):
+        for i in range(2):
             rotation_frame.columnconfigure(i, weight=1)
             translation_frame.columnconfigure(i, weight=1)
         
@@ -378,12 +385,13 @@ class ProjectorGUI:
         vy_filter = self.vy_filter_var.get()
         camera_filter_x = self.camera_filter_x_var.get()
         camera_filter_y = self.camera_filter_y_var.get()
+        radar_trajectory = self.show_radar_trajectory.get()
         
         payload = json.dumps([action, method, sample_interval, optimize_filter, 
-                            vx_filter, vy_filter, camera_filter_x, camera_filter_y])
+                            vx_filter, vy_filter, camera_filter_x, camera_filter_y, radar_trajectory])
         msg = String(data=payload)
         self.ros_node.optimize_action_pub.publish(msg)
-        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}")
+        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 雷達軌跡: {radar_trajectory}")
     
     def save_calibration(self):
         """Save current calibration to a file"""

@@ -191,6 +191,9 @@ class TrafficMonitor(Node):
             self.sampling_interval = 1 # 儲存的間隔 (1的話就是每一幀都要)
             self.frame_count = 0
 
+            self.radar_trajectory = set() # 儲存雷達點的軌跡，用set是因為要去除重複點
+            self.show_radar_trajectory = False # 是否顯示雷達軌跡
+
             # 自動校正時的過濾條件
             self.optimize_filter = 'all' # 自動化校正的時候，向左的雷達點只跟向左的物件框做優化
             self.radar_vx_filter = 'all' # 雷達點的vx過濾條件(只留下vx > 0的點)
@@ -582,6 +585,7 @@ class TrafficMonitor(Node):
         points = points[np.logical_and(v > 2.0, dist < 100)]
         points_2d = project_points(points[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
 
+        
         # make radar points boxes and update tracker
         # (n, 2) to (n, 4) (xyxy)
 
@@ -759,6 +763,7 @@ class TrafficMonitor(Node):
             vy_filter = command[5]
             camera_filter_x = command[6]
             camera_filter_y = command[7]
+            show_radar_trajectory = command[8]
         except Exception as e:
             # rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             self.get_logger().warn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
@@ -813,7 +818,9 @@ class TrafficMonitor(Node):
         elif action == 'optimize':
             print("開始優化")
             self.optimize = True
-            
+        elif action == 'radar_trajectory':
+            self.show_radar_trajectory = show_radar_trajectory
+            self.get_logger().info("顯示雷達軌跡: " + str(self.show_radar_trajectory))
 
 
     def vis_recorded_data(self):
@@ -1393,7 +1400,7 @@ class TrafficMonitor(Node):
         self.time_check(stamp)
 
         echo_frame = frame = self.cv_bridge.imgmsg_to_cv2(image_msg)
-
+        
         
 
 
@@ -1409,15 +1416,31 @@ class TrafficMonitor(Node):
             boxes, ids, class_ids = [], [], []
             radar_frame = frame.copy()
         
+
+        if self.show_radar_trajectory:
+            # 顯示雷達點的軌跡
+            radar_trajectory_2d = project_points(np.array(list(self.radar_trajectory))[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
+            for pt in radar_trajectory_2d:
+                x, y = pt
+                if 0 <= x < self.image_width and 0 <= y < self.image_height:
+                    cv2.circle(track_frame, (int(x), int(y)), 10, (0, 255, 255), -1)
+
+
         # process radar
         # points_3d: 雷達3D點，[x, y, z, vx, vy]
         points_3d, points_2d, radar_tracks, radar_frame = self.radar_to_image(radar_msg, track_frame, self.extrinsic_matrix)
         original_points_3d, original_points_2d, original_radar_tracks, original_radar_frame = self.radar_to_image(radar_msg, frame.copy(), self.original_extrinsic_matrix)
         
+        for point in points_3d:
+            self.radar_trajectory.add(tuple(point))
+
 
         # fuse radar points and bounding boxes
         objects = self.fusion(frame.copy(), self.camera_id, boxes, ids, class_ids, points_2d, points_3d)
         self.flow_stats(objects)
+
+
+        
 
         fusion_frame = self.vis_traffic_result(radar_frame.copy(), objects)
         # camera_detection = self.vis_traffic_result(frame.copy(), objects)

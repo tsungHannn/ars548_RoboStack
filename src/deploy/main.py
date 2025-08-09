@@ -109,13 +109,16 @@ class TrafficMonitor():
         self.data = State()
         # cv2.namedWindow('traffic_monitor', cv2.WINDOW_NORMAL)
 
-        # # self.extrinsic_matrix 是一個list
-        # self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
+        # self.extrinsic_matrix 是一個list
+        self.extrinsic_matrix = self.config.camera.extrinsic_matrix.copy() # 從config讀取外參
         
-        # 用隨機參數作為外參
-        self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
-        print("隨機初始化外參矩陣:", self.extrinsic_matrix)
-        print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
+        # 內參
+        self.camera_intrinsic_matrix = self.config.camera.camera_matrix.copy() # 從config讀取內參
+
+        # # 用隨機參數作為外參
+        # self.extrinsic_matrix = self.transformation_matrix(np.random.rand(7)).tolist() # 隨機初始化外參矩陣
+        # print("隨機初始化外參矩陣:", self.extrinsic_matrix)
+        # print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
         
 
 
@@ -231,15 +234,6 @@ class TrafficMonitor():
         _ = rospy.Timer(rospy.Duration(1.0 / self.config.fps), self.process_sensor_data)
 
 
-
-        self.radar_pc = message_filters.Subscriber('/radar/point_cloud_object', PointCloud2)
-        self.radar_obj = message_filters.Subscriber('/radar/object_list', ObjectList) # ARS548 object_list
-        self.sync = message_filters.ApproximateTimeSynchronizer([self.radar_pc, self.radar_obj], queue_size=1, slop=0.1)
-        self.sync.registerCallback(self.radar_filter)
-        
-
-
-
         # self.pub_echo = rospy.Publisher(self.config.echo_topic, Image, queue_size=2)
         self.pub_track = rospy.Publisher(self.config.track_topic, Image, queue_size=2)
         self.pub_radar_project = rospy.Publisher(self.config.radar_project_topic, Image, queue_size=2)
@@ -255,7 +249,14 @@ class TrafficMonitor():
         # control topics
         self.sub_matrix = rospy.Subscriber('/control/matrix', Float32MultiArray, self.matrix_callback)
         self.sub_optimize_action = rospy.Subscriber('/control/optimize_action', String, self.control_callback)
-    
+        self.sub_intrinsic = rospy.Subscriber('/control/camera_intrinsic', Float32MultiArray, self.intrinsic_callback)
+
+        self.radar_pc = message_filters.Subscriber('/radar/point_cloud_object', PointCloud2)
+        self.radar_obj = message_filters.Subscriber('/radar/object_list', ObjectList) # ARS548 object_list
+        self.sync = message_filters.ApproximateTimeSynchronizer([self.radar_pc, self.radar_obj], queue_size=1, slop=0.1)
+        self.sync.registerCallback(self.radar_filter)
+
+
     def setup_traffic_stats(self):
         """
         Initialize traffic statistics tracking
@@ -279,6 +280,11 @@ class TrafficMonitor():
     def matrix_callback(self, msg):
         matrix = np.array(msg.data).reshape((4, 4))
         self.extrinsic_matrix = matrix
+    
+    def intrinsic_callback(self, msg):
+        print("Received intrinsic matrix update")
+        intrinsic_matrix = np.array(msg.data).reshape((3, 3))
+        self.camera_intrinsic_matrix = intrinsic_matrix.tolist()
     
     def val_callback(self, topic, msg):
         self.data.control.update({topic: msg.data})
@@ -370,7 +376,7 @@ class TrafficMonitor():
         dets = self.model.track(image, show=False, persist=True, tracker='bytetrack.yaml', \
             verbose=False, classes=self.config.model.classes, conf=0.08, imgsz=768, half=True)
         if not len(dets[0].boxes.xywh.cpu()):
-            return [], [], image
+            return [], [], [], image
         boxes = dets[0].boxes.xywh.cpu()
         track_ids = dets[0].boxes.id
         class_ids = dets[0].boxes.cls
@@ -532,7 +538,7 @@ class TrafficMonitor():
 
         # points = points[(v > 2.0)]
         points = points[np.logical_and(v > 2.0, dist < 100)]
-        points_2d = project_points(points[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+        points_2d = project_points(points[:, :3], self.camera_intrinsic_matrix, extrinsic_matrix)
 
         # make radar points boxes and update tracker
         # (n, 2) to (n, 4) (xyxy)
@@ -758,8 +764,11 @@ class TrafficMonitor():
             self.optimize = True
         elif action == 'radar_trajectory':
             self.show_radar_trajectory = show_radar_trajectory
-            self.get_logger().info("顯示雷達軌跡: " + str(self.show_radar_trajectory))
-            
+            rospy.loginfo("顯示雷達軌跡: " + str(self.show_radar_trajectory))
+        elif action == 'clear_trajectory':
+            self.radar_trajectory.clear()
+            rospy.loginfo("清除雷達軌跡")
+
 
 
     def vis_recorded_data(self):
@@ -791,7 +800,7 @@ class TrafficMonitor():
                     # cv2.circle(vis_img, (int(cx), int(cy)), 15, (0, 255, 0), -1)
 
                 if len(points_3d) != 0:
-                    projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
+                    projected = project_points(points_3d[:, :3], self.camera_intrinsic_matrix, self.extrinsic_matrix)
                     for idx, pt in enumerate(projected):
                         x, y = pt
                         vy = points_3d[idx, 4]  # vy 來自原始雷達點
@@ -814,7 +823,7 @@ class TrafficMonitor():
         valid_distances = []  # 用於計算有效的損失
         results = []  # [(pt_int, closest_center, min_dist, vy)] # 可視化用
 
-        proj_pts = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+        proj_pts = project_points(points_3d[:, :3], self.camera_intrinsic_matrix, extrinsic_matrix)
 
         # 點出所有框的中心點
         for box, tid in zip(bboxes, bboxes_id):
@@ -970,7 +979,7 @@ class TrafficMonitor():
         total_loss = 0.0
 
         for idx, (points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image) in enumerate(saved_data):
-            # projected = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic_matrix)
+            # projected = project_points(points_3d[:, :3], self.camera_intrinsic_matrix, extrinsic_matrix)
 
             
             loss = self.compute_loss(extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=image, visualize=visualize)
@@ -1132,7 +1141,7 @@ class TrafficMonitor():
                     extrinsic[:3, 3] = T
 
                     # 投影所有3D雷達點
-                    proj_pts = project_points(points_3d[:, :3], self.config.camera.camera_matrix, extrinsic)
+                    proj_pts = project_points(points_3d[:, :3], self.camera_intrinsic_matrix, extrinsic)
                     proj_pts_int = np.round(proj_pts).astype(np.int32)
 
                     # 過濾掉畫面外的點
@@ -1166,8 +1175,8 @@ class TrafficMonitor():
                     if len(pts_3d_right_all) > 0:
                         pts_3d_right_all = np.vstack(pts_3d_right_all)
 
-                    pts_2d_left_all = project_points(pts_3d_left_all[:, :3], self.config.camera.camera_matrix, extrinsic)
-                    pts_2d_right_all = project_points(pts_3d_right_all[:, :3], self.config.camera.camera_matrix, extrinsic)
+                    pts_2d_left_all = project_points(pts_3d_left_all[:, :3], self.camera_intrinsic_matrix, extrinsic)
+                    pts_2d_right_all = project_points(pts_3d_right_all[:, :3], self.camera_intrinsic_matrix, extrinsic)
 
 
                     # 使用cv2.fitLine擬合向左群體軌跡向量
@@ -1318,12 +1327,20 @@ class TrafficMonitor():
         echo_frame = frame = self.cv_bridge.imgmsg_to_cv2(image_msg)
 
         
+        track_frame = frame.copy()
+        if self.show_radar_trajectory and len(self.radar_trajectory) > 0:
+            # 顯示雷達點的軌跡
+            radar_trajectory_2d = project_points(np.array(list(self.radar_trajectory))[:, :3], self.camera_intrinsic_matrix, self.extrinsic_matrix)
+            for pt in radar_trajectory_2d:
+                x, y = pt
+                if 0 <= x < self.image_width and 0 <= y < self.image_height:
+                    cv2.circle(track_frame, (int(x), int(y)), 10, (0, 255, 255), -1)
 
 
         # detect and track
         if self.config.model_enabled:
             if self.config.model.modality == 'camera':
-                boxes, ids, class_ids, track_frame = self.detect_objects(frame)
+                boxes, ids, class_ids, track_frame = self.detect_objects(track_frame)
                 if len(boxes):
                     self.pub_track.publish(self.to_image_msg(track_frame, stamp))
             elif self.config.model.modality == 'camera+radar':
@@ -1333,14 +1350,7 @@ class TrafficMonitor():
             radar_frame = frame.copy()
         
 
-        if self.show_radar_trajectory:
-            # 顯示雷達點的軌跡
-            radar_trajectory_2d = project_points(np.array(list(self.radar_trajectory))[:, :3], self.config.camera.camera_matrix, self.extrinsic_matrix)
-            for pt in radar_trajectory_2d:
-                x, y = pt
-                if 0 <= x < self.image_width and 0 <= y < self.image_height:
-                    cv2.circle(track_frame, (int(x), int(y)), 10, (0, 255, 255), -1)
-
+        
 
         # process radar
         # points_3d: 雷達3D點，[x, y, z, vx, vy]

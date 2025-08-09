@@ -1,9 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/cmake_install.cmake",
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/ars548_ros-noetic/ars548_messages/cmake_install.cmake",
-		"/home/mvclab/workspace/ncsist/ars548_RoboStack/build/ars548_ros-noetic/ars548_driver/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

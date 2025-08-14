@@ -1,3 +1,9 @@
+###
+# 這個還沒有加內參校正、清除雷達軌跡
+# 目前主要還是以ROS1為主
+###
+
+
 import json
 import math
 from dataclasses import dataclass

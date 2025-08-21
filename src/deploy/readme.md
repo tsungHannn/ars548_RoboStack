@@ -252,7 +252,7 @@
       echo "enp4s0f3" | sudo sh configurer2.sh
       ```
    2. `python launch.py --stream`
-- 雷達 IP: 雷達發送的 IP 目標都是 `224.0.2.2`，所以要在 driver 裡面指定，用網卡名稱來決定讀取哪一台雷達的資訊
+- 雷達 IP: 雷達發送的 IP 目標都是 `224.0.2.2`，所以要在 driver 裡面指定，用網卡名稱來決定讀取哪一台雷達的資訊。
 - 斷線問題: 因為雷達封包非常不穩定，如果掉太久原本的driver會直接抱錯，所以把Timeout的檢查刪掉了。
-
+- 相機: 如果stream_camera.py啟動失敗，可以開SpinView來看有沒有正確讀到攝影機。看完之後把SpinView關掉，再重新`python stream_camera.py`。
     

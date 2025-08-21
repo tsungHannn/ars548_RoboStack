@@ -27,6 +27,9 @@ from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
 
+from adam_optimize import AdamCalibrationTrainer
+
+
 # import keyboard
 import threading
 
@@ -120,7 +123,7 @@ class TrafficMonitor():
         # print("隨機初始化外參矩陣:", self.extrinsic_matrix)
         # print("參數:", self.transformation_matrix_to_param(self.extrinsic_matrix))
         
-
+        self.trainer = AdamCalibrationTrainer(self.camera_intrinsic_matrix) # Adam優化器初始化
 
 
         self.original_extrinsic_matrix = self.extrinsic_matrix.copy() # 為了顯示初始外參的投影結果
@@ -155,15 +158,15 @@ class TrafficMonitor():
             # 要優化的外參參數(x, y, z軸的旋轉、平移)
             # self.extrinsic_param = np.array([179.36, -83.87, -89.06, 0.11, 4.71, -2.18]) # [Rx, Ry, Rz, Tx, Ty, Tz]
             
-            # # 設定隨機優化參數
-            # quaternion = random_unit_quaternion()
-            # translation = random_translation()
-            # self.extrinsic_param_quat = np.array([quaternion[0], quaternion[1], quaternion[2], quaternion[3], translation[0], translation[1], translation[2]])
+            # 設定隨機優化參數
+            quaternion = random_unit_quaternion()
+            translation = random_translation()
+            self.extrinsic_param_quat = np.array([quaternion[0], quaternion[1], quaternion[2], quaternion[3], translation[0], translation[1], translation[2]])
             # self.extrinsic_param_eular = self.quaternion_to_euler(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 
             
-            # 把讀到的外參變成參數(quat)
-            self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
+            # # 把讀到的外參變成參數(quat)
+            # self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
             
 
             self.saved_optimize_data = [] # 儲存[points_3d, boxes, ids, frame.copy()]
@@ -173,6 +176,9 @@ class TrafficMonitor():
             self.optimize_method = "L-BFGS-B" # 優化方法
             self.sampling_interval = 1 # 儲存的間隔 (1的話就是每一幀都要)
             self.frame_count = 0
+
+
+
 
             # 自動校正時的過濾條件
             self.optimize_filter = 'all' # 自動化校正的時候，向左的雷達點只跟向左的物件框做優化
@@ -994,6 +1000,16 @@ class TrafficMonitor():
         return total_loss
 
 
+    def batch_optimization_loss_normalized(self, normalized_params, bounds, saved_data, visualize=False):
+        """使用標準化參數的損失函數"""
+        # 將標準化參數轉回原始範圍
+        original_params = self.denormalize_params(normalized_params, bounds)
+        
+        # 調用原有的損失函數
+        return self.batch_optimization_loss(original_params, saved_data, visualize)
+
+
+
     # ====== Quaternion Utils ======
     def euler_to_quaternion(self, param_euler):
         # param_euler: [Rx, Ry, Rz, Tx, Ty, Tz]
@@ -1030,6 +1046,38 @@ class TrafficMonitor():
         # 將每個元素轉換為 float 類型，避免出現 np.float64
         return [float(qx), float(qy), float(qz), float(qw), float(tx), float(ty), float(tz)]
     
+    def normalize_params(self, params, bounds):
+        """
+        根據bounds將參數標準化到 [0, 1] 範圍
+        params: 原始參數 [qx, qy, qz, qw, tx, ty, tz]
+        bounds: 參數邊界 [(min, max), (min, max), ...]
+        """
+        normalized_params = []
+        
+        for i, (param, (min_val, max_val)) in enumerate(zip(params, bounds)):
+            # 將參數從 [min_val, max_val] 映射到 [0, 1]
+            normalized = (param - min_val) / (max_val - min_val)
+            # 確保在 [0, 1] 範圍內
+            normalized = max(0, min(1, normalized))
+            normalized_params.append(normalized)
+        
+        return normalized_params
+
+    def denormalize_params(self, normalized_params, bounds):
+        """
+        根據bounds將標準化參數轉回原始範圍
+        normalized_params: 標準化參數 [0, 1] 範圍
+        bounds: 參數邊界 [(min, max), (min, max), ...]
+        """
+        original_params = []
+        for normalized, (min_val, max_val) in zip(normalized_params, bounds):
+            # 將參數從 [0, 1] 映射回 [min_val, max_val]
+            original = normalized * (max_val - min_val) + min_val
+            original_params.append(original)
+        
+        return original_params
+
+
 
 
     
@@ -1399,8 +1447,8 @@ class TrafficMonitor():
                 self.vis_thread.join()
             
             rotation_bounds = [(-1, 1)] * 4
-            # translation_bounds = [(-10, 10)] * 3
-            translation_bounds = [(-0.5, 0.5), (-5, 5), (-0.5, 0.5)]
+            translation_bounds = [(-10, 10)] * 3
+            # translation_bounds = [(-0.5, 0.5), (-5, 5), (-0.5, 0.5)]
             
             bounds = rotation_bounds + translation_bounds
             # rx, ry, rz, tx, ty, tz = self.extrinsic_param
@@ -1411,25 +1459,44 @@ class TrafficMonitor():
             # init_extrinsic_param_quat = self.extrinsic_param_quat.copy()
             self.extrinsic_param_quat = self.transformation_matrix_to_param(self.extrinsic_matrix)
 
-            
+            # 將當前參數標準化
+            normalized_initial_params = self.normalize_params(self.extrinsic_param_quat, bounds)
+            # 標準化後的bounds都是 [0, 1]
+            normalized_bounds = [(0, 1)] * 7  # 7個參數都在 [0, 1] 範圍內
+
             print("開始優化, method:", self.optimize_method)
-            result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
-                            args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
+            # 一開始的minimize方法
+            # result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
+            #                 args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
+
+            # # 使用標準化參數的minimize方法
+            # result = minimize(self.batch_optimization_loss_normalized, 
+            #          normalized_initial_params,
+            #          args=(bounds, self.saved_filter_optimize_data, True), 
+            #          method=self.optimize_method, 
+            #          bounds=normalized_bounds)
+            # # 將優化結果轉回原始範圍
+            # optimized_original_params = self.denormalize_params(result.x, bounds)
+
+            # Adam
+            adam_params, adam_loss = self.trainer.train(self.saved_filter_optimize_data, initial_params=self.extrinsic_param_quat, epochs=1000, lr=0.01)
+            print(f"Adam優化完成，損失: {adam_loss:.6f}")
+            print("Adam優化參數:", adam_params)
             
-            self.extrinsic_matrix = self.transformation_matrix(result.x)
+            self.extrinsic_matrix = self.transformation_matrix(adam_params)
             end_time = rospy.Time.now()
             print("New extrinsic matrix:\n", self.extrinsic_matrix)
             # print("-"*20)
             # print("Old extrinsic matrix:\n", np.array(self.original_extrinsic_matrix))
 
-            rospy.loginfo("最佳化完成，共優化: %d 幀，最小損失: %.2f", len(self.saved_filter_optimize_data), result.fun)
+            # rospy.loginfo("使用 %s 方法進行優化", self.optimize_method)
+            # rospy.loginfo("最佳化完成，共優化: %d 幀，最小損失: %.2f", len(self.saved_filter_optimize_data), result.fun)
             
-            rospy.loginfo("最佳參數: %s", str(result.x))
-            # rospy.loginfo("初始參數: %s", str(init_extrinsic_param_quat))
-            result_quat_param = list(result.x)
-            result_euler_param = self.quaternion_to_euler(result_quat_param)
-            rospy.loginfo("轉換回角度: %s", result_euler_param)
-            rospy.loginfo("原始參數: %s", str(self.extrinsic_param_quat))
+            # rospy.loginfo("最佳參數: %s", str(result.x))
+            # result_quat_param = list(result.x)
+            # result_euler_param = self.quaternion_to_euler(result_quat_param)
+            # rospy.loginfo("轉換回角度: %s", result_euler_param)
+            # rospy.loginfo("原始參數: %s", str(self.extrinsic_param_quat))
             rospy.loginfo_throttle(5, f'Processing time: {(end_time - start_time).to_sec():.3f}s')
             
             # 把校正紀錄存下來

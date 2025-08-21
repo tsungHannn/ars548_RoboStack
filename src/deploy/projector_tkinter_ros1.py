@@ -217,7 +217,7 @@ class ProjectorGUI:
         
         ttk.Label(settings_frame, text="優化方法:").grid(row=0, column=0, sticky=tk.W, padx=5)
         method_combo = ttk.Combobox(settings_frame, textvariable=self.method_var,
-                                  values=["L-BFGS-B", "Powell", "Nelder-Mead"], width=12)
+                                  values=["L-BFGS-B", "Powell", "Nelder-Mead", 'trust-constr'], width=12)
         method_combo.grid(row=0, column=1, padx=5)
         
         ttk.Label(settings_frame, text="取樣間隔:").grid(row=0, column=2, sticky=tk.W, padx=5)

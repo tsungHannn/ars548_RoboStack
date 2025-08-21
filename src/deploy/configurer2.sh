@@ -10,11 +10,11 @@ configurer(){
 configureConnection(){
     echo "Write your parent interface name"
     read parent
-    sudo ip link add link $parent name radarConnection type vlan id 19
-    sudo ip addr add 10.13.1.166/24 dev radarConnection
-    sudo ip link set radarConnection up
-    sudo ip route replace default via 10.13.1.1 dev radarConnection                                                                      
-    sudo ip route del default
+    sudo ip link add link $parent name radar2 type vlan id 19
+    sudo ip addr add 10.13.2.168/24 dev radar2
+    sudo ip link set radar2 up
+    sudo ip route replace default via 10.13.2.2 dev radar2                                                                      
+
     echo "Connection Created"
 }
 

@@ -2,7 +2,7 @@ import subprocess
 from argparse import ArgumentParser
 from time import sleep
 
-pre_commands = ['micromamba activate ros && source ~/workspace/ncsist/ars548_RoboStack/devel/setup.bash']
+pre_commands = ['micromamba activate ros && source ~/ars548_RoboStack/devel/setup.bash']
 pre_command = ' && '.join(pre_commands)
 commands = [
     ('rviz', 'rviz -d ./main.rviz'),
@@ -10,7 +10,8 @@ commands = [
     ('main', 'python main.py'),
 ]
 
-stream = [('stream_camera', 'python stream_camera.py'), ('stream_radar', 'rosrun ars548_driver ars548_driver')]
+stream = [('stream_camera', 'python stream_camera.py'), 
+          ('stream_radar', 'rosrun ars548_driver ars548_driver')]
 control = ('control', 'python projector_tkinter_ros1.py')
 bag = ('rosbag', 'rosbag play /media/mvclab/HDD/ncsist/2025/data/20250226/B_place/1_2025-02-26-10-36-45.bag -l --clock -u 6')
 

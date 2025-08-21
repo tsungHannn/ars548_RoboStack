@@ -14,7 +14,7 @@ configureConnection(){
     sudo ip addr add 10.13.1.166/24 dev radar1
     sudo ip link set radar1 up
     sudo ip route replace default via 10.13.1.1 dev radar1
-
+    sudo ip route del default
     echo "Connection Created"
 }
 

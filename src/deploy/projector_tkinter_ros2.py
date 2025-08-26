@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import json
 import numpy as np
 import sys
@@ -13,7 +16,6 @@ from tkinter.scrolledtext import ScrolledText
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import Float32MultiArray, String
 
 class ROSNode(Node):
@@ -23,8 +25,14 @@ class ROSNode(Node):
         
         self.matrix_pub = self.create_publisher(Float32MultiArray, '/control/matrix', 10)
         self.optimize_action_pub = self.create_publisher(String, '/control/optimize_action', 10)
-        self.matrix_sub = self.create_subscription(Float32MultiArray, '/radar/extrinsic_matrix', self.update_matrix_from_auto_calib, 10)
-        
+        self.matrix_sub = self.create_subscription(
+            Float32MultiArray, 
+            '/radar/extrinsic_matrix', 
+            self.update_matrix_from_auto_calib, 
+            10
+        )
+        self.intrinsic_pub = self.create_publisher(Float32MultiArray, '/control/camera_intrinsic', 10)
+
         # 回調函數將通過主視窗設置
         self.gui_callback = None
         
@@ -38,7 +46,7 @@ class ROSNode(Node):
             self.gui_callback(msg)
 
 class ProjectorGUI:
-    def __init__(self, ros_node, config_path='config.yaml'):
+    def __init__(self, ros_node: ROSNode, config_path='config.yaml'):
         self.ros_node = ros_node
         self.ros_node.set_gui_callback(self.update_matrix_from_auto_calib)
         
@@ -51,6 +59,7 @@ class ProjectorGUI:
         # Calibration parameters
         self.cali_scale_degree = 0.2
         self.cali_scale_trans = 0.03
+        self.cali_scale_intrinsic = 1.0005
         self.modification_list = []
         
         # Load config and initialize parameters
@@ -65,6 +74,7 @@ class ProjectorGUI:
         # Variables for controls
         self.degree_var = tk.DoubleVar(value=self.cali_scale_degree)
         self.trans_var = tk.DoubleVar(value=self.cali_scale_trans)
+        self.intrinsic_var = tk.DoubleVar(value=self.cali_scale_intrinsic)
         self.method_var = tk.StringVar(value="Nelder-Mead")
         self.sample_interval_var = tk.StringVar(value="1")
 
@@ -121,6 +131,15 @@ class ProjectorGUI:
         self.trans_label = ttk.Label(scale_frame, text=f"{self.cali_scale_trans*100:.1f} cm")
         self.trans_label.grid(row=1, column=2, padx=5)
         
+        # Intrinsic step
+        ttk.Label(scale_frame, text="Intrinsic Step:").grid(row=2, column=0, sticky=tk.W, padx=5)
+        intrinsic_scale = ttk.Scale(scale_frame, from_=1.0, to=1.1, 
+                               orient=tk.HORIZONTAL, variable=self.intrinsic_var,
+                               command=self.update_intrinsic_scale)
+        intrinsic_scale.grid(row=2, column=1, sticky=tk.EW, padx=5)
+        self.intrinsic_label = ttk.Label(scale_frame, text=f"{self.cali_scale_intrinsic:.4f}")
+        self.intrinsic_label.grid(row=2, column=2, padx=5)
+
         scale_frame.columnconfigure(1, weight=1)
         
         # ======================
@@ -133,7 +152,8 @@ class ProjectorGUI:
         checkbox_frame = ttk.Frame(transform_frame)
         checkbox_frame.pack(fill=tk.X, pady=5)
         ttk.Checkbutton(checkbox_frame, text="顯示雷達軌跡", variable=self.show_radar_trajectory, command=lambda: self.send_action("radar_trajectory")).pack(side=tk.LEFT)
-
+        ttk.Button(checkbox_frame, text="清除軌跡", command=lambda: self.send_action("clear_trajectory")).pack(side=tk.RIGHT, padx=5)
+        
         # Rotation section
         rotation_frame = ttk.LabelFrame(transform_frame, text="Rotation", padding=5)
         rotation_frame.pack(fill=tk.X, pady=5)
@@ -168,10 +188,26 @@ class ProjectorGUI:
             ttk.Button(translation_frame, text=text, command=command, width=8).grid(
                 row=i//2, column=i%2, padx=2, pady=2, sticky=tk.EW)
         
-        for i in range(2):
+        # 調整相機內參
+        camera_intrinsic_frame = ttk.LabelFrame(transform_frame, text="Camera Intrinsic", padding=5)
+        camera_intrinsic_frame.pack(fill=tk.X, pady=5)
+        
+        intrinsic_buttons = [
+            ("+ fx", lambda: self.apply_camera_intrinsic_modification('+fx')),
+            ("- fx", lambda: self.apply_camera_intrinsic_modification('-fx')),
+            ("+ fy", lambda: self.apply_camera_intrinsic_modification('+fy')),
+            ("- fy", lambda: self.apply_camera_intrinsic_modification('-fy')),
+        ]
+        
+        for i, (text, command) in enumerate(intrinsic_buttons):
+            ttk.Button(camera_intrinsic_frame, text=text, command=command, width=8).grid(
+                row=i//2, column=i%2, padx=2, pady=2, sticky=tk.EW)
+        
+        for i in range(3):
             rotation_frame.columnconfigure(i, weight=1)
             translation_frame.columnconfigure(i, weight=1)
-        
+            camera_intrinsic_frame.columnconfigure(i, weight=1)
+
         # ======================
         # Auto Calibration
         # ======================
@@ -272,7 +308,7 @@ class ProjectorGUI:
             
             print("Configuration loaded successfully")
             
-        except FileNotFoundError:
+        except IOError:
             print(f"Config file not found at {self.config_path}")
             # Create default matrices
             self.camera_matrix = np.array([
@@ -338,6 +374,12 @@ class ProjectorGUI:
         self.trans_label.config(text=f"{self.cali_scale_trans*100:.1f} cm")
         self.init_calibration()
     
+    def update_intrinsic_scale(self, value):
+        """更新內參調整步長"""
+        self.cali_scale_intrinsic = float(value)
+        self.intrinsic_label.config(text=f"{self.cali_scale_intrinsic:.3f}")
+        print(f"內參調整步長已更新為: {self.cali_scale_intrinsic:.3f}")
+    
     def apply_modification(self, index):
         """Apply calibration modification based on button click"""
         if 0 <= index < len(self.modification_list):
@@ -345,10 +387,56 @@ class ProjectorGUI:
             self.update_matrix_display()
             print(f"Applied modification {index}")
     
+    def apply_camera_intrinsic_modification(self, action):
+        """根據按鈕點擊應用相機內參矩陣修改"""
+        if action == '+fx':
+            self.camera_matrix[0, 0] *= self.cali_scale_intrinsic
+            print(f"fx 增加: {self.camera_matrix[0, 0]:.3f}")
+        elif action == '-fx':
+            self.camera_matrix[0, 0] /= self.cali_scale_intrinsic
+            print(f"fx 減少: {self.camera_matrix[0, 0]:.3f}")
+        elif action == '+fy':
+            self.camera_matrix[1, 1] *= self.cali_scale_intrinsic
+            print(f"fy 增加: {self.camera_matrix[1, 1]:.3f}")
+        elif action == '-fy':
+            self.camera_matrix[1, 1] /= self.cali_scale_intrinsic
+            print(f"fy 減少: {self.camera_matrix[1, 1]:.3f}")
+        
+        # 更新相機內參顯示和發布
+        self.update_camera_matrix_display()
+        self.publish_camera_matrix()
+
+    def update_camera_matrix_display(self):
+        """更新相機內參矩陣顯示（在 GUI 中添加顯示區域）"""
+        # 如果需要在 GUI 中顯示相機內參，可以添加一個 Text widget
+        print("相機內參矩陣:")
+        for i in range(3):
+            row_str = "["
+            for j in range(3):
+                row_str += f"{self.camera_matrix[i, j]:8.3f} "
+            row_str += "]"
+            print(row_str)
+    
+    def publish_camera_matrix(self):
+        """發布相機內參矩陣到 ROS"""
+        matrix_msg = Float32MultiArray()
+        matrix_msg.data = self.camera_matrix.flatten().tolist()
+        self.ros_node.intrinsic_pub.publish(matrix_msg)
+        print("已發布相機內參矩陣到 ROS")
+
     def reset_calibration(self):
         """Reset calibration to original values"""
         self.extrinsic_matrix = self.original_extrinsic.copy()
+
+        # 重置相機內參到原始值
+        if hasattr(self, 'original_camera_matrix'):
+            self.camera_matrix = self.original_camera_matrix.copy()
+        else:
+            # 如果沒有原始內參，從配置重新載入
+            self.camera_matrix = np.array(self.config.camera.camera_matrix.copy())
+            
         self.update_matrix_display()
+        self.update_camera_matrix_display()
         print("Calibration reset to original values")
     
     def update_matrix_display(self):
@@ -389,13 +477,15 @@ class ProjectorGUI:
         
         payload = json.dumps([action, method, sample_interval, optimize_filter, 
                             vx_filter, vy_filter, camera_filter_x, camera_filter_y, radar_trajectory])
-        msg = String(data=payload)
+        msg = String()
+        msg.data = payload
         self.ros_node.optimize_action_pub.publish(msg)
         print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 雷達軌跡: {radar_trajectory}")
     
     def save_calibration(self):
         """Save current calibration to a file"""
         self.config.camera.extrinsic_matrix = self.extrinsic_matrix.tolist()
+        self.config.camera.camera_matrix = self.camera_matrix.tolist()  # 儲存內參
         
         file_path = self.config_path
         if file_path:
@@ -411,35 +501,34 @@ class ProjectorGUI:
         """Start the GUI main loop"""
         self.root.mainloop()
 
-
-def ros_spin_thread(executor):
-    """ROS spinning in separate thread"""
-    try:
-        executor.spin()
-    except Exception as e:
-        print(f"ROS thread error: {e}")
-
-
 def main():
     print("正在初始化 ROS2...")
+    
+    # Initialize ROS2
     rclpy.init()
     
     # Create ROS node
     ros_node = ROSNode()
-    
-    # Create executor and start ROS thread
-    executor = SingleThreadedExecutor()
-    executor.add_node(ros_node)
-    
-    ros_thread = threading.Thread(target=ros_spin_thread, args=(executor,), daemon=True)
-    ros_thread.start()
     
     print("正在啟動 GUI...")
     
     # Create and run GUI
     try:
         gui = ProjectorGUI(ros_node)
+        
+        # Start ROS spinning in separate thread
+        def spin_ros():
+            try:
+                rclpy.spin(ros_node)
+            except Exception as e:
+                print(f"ROS spinning error: {e}")
+        
+        ros_thread = threading.Thread(target=spin_ros)
+        ros_thread.daemon = True
+        ros_thread.start()
+        
         gui.run()
+        
     except KeyboardInterrupt:
         print("使用者中斷")
     except Exception as e:
@@ -447,10 +536,11 @@ def main():
     finally:
         # Cleanup
         print("正在清理資源...")
-        executor.remove_node(ros_node)
-        ros_node.destroy_node()
-        rclpy.shutdown()
-
+        try:
+            ros_node.destroy_node()
+            rclpy.shutdown()
+        except Exception as e:
+            print(f"清理資源時發生錯誤: {e}")
 
 if __name__ == "__main__":
     main()

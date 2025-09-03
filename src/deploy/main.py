@@ -733,7 +733,7 @@ class TrafficMonitor():
 
             self.current_stats.congestion_level = congestion_level
 
-            # mqtt
+            # mqtt 
             self.mqtt_publisher.publish_traffic_data(self.current_stats.flow, np.mean(self.all_speeds), self.current_stats.congestion_level)
 
             self.reset_traffic_stats(current_time)

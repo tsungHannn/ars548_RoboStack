@@ -69,6 +69,9 @@ class Ars548_Driver {
     sensor_msgs::PointCloud2 cloud_msgObj;
     sensor_msgs::PointCloud2 cloud_msgDetect;
     geometry_msgs::PoseArray cloud_Direction;
+    
+    std::string topic_prefix; //TODO: topic prefix
+    std::string radarInterface; //TODO: radar interface
 
     sensor_msgs::PointCloud2Modifier modifierObject;
     sensor_msgs::PointCloud2Modifier modifierDetection;
@@ -504,21 +507,37 @@ class Ars548_Driver {
         // auto node=rclcpp::Node::make_shared("publisherObj");
         node_handle = ros::NodeHandle();
 
-        //These are the publishers that send the data in a custom message
-        // auto statusPublisher=node->create_publisher<ars548_messages::Status>("Status",10);
-        // auto objectPublisher=node->create_publisher<ars548_messages::msg::ObjectList>("ObjectList",10);
-        // auto detectionsPublisher=node->create_publisher<ars548_messages::msg::DetectionList>("DetectionList",10);
-        pubs["Status"] = node_handle.advertise<ars548_messages::Status>("/radar/status", 1);
-        pubs["ObjectList"] = node_handle.advertise<ars548_messages::ObjectList>("/radar/object_list", 1);
-        pubs["DetectionList"] = node_handle.advertise<ars548_messages::DetectionList>("/radar/detection_list", 1);
+        // ==================================================
+        // //These are the publishers that send the data in a custom message
+        // // auto statusPublisher=node->create_publisher<ars548_messages::Status>("Status",10);
+        // // auto objectPublisher=node->create_publisher<ars548_messages::msg::ObjectList>("ObjectList",10);
+        // // auto detectionsPublisher=node->create_publisher<ars548_messages::msg::DetectionList>("DetectionList",10);
+        // pubs["Status"] = node_handle.advertise<ars548_messages::Status>("/radar/status", 1);
+        // pubs["ObjectList"] = node_handle.advertise<ars548_messages::ObjectList>("/radar/object_list", 1);
+        // pubs["DetectionList"] = node_handle.advertise<ars548_messages::DetectionList>("/radar/detection_list", 1);
     
-        //These are the publishers that send the data to Rviz2
-        // auto directionPublisher=node->create_publisher<geometry_msgs::msg::PoseArray>("DirectionVelocity",10);
-        // auto pubObj= node->create_publisher<sensor_msgs::msg::PointCloud2>("PointCloudObject",10);
-        // auto pubDetect=node->create_publisher<sensor_msgs::msg::PointCloud2>("PointCloudDetection",10);
-        pubs["DirectionVelocity"] = node_handle.advertise<geometry_msgs::PoseArray>("/radar/direction_velocity", 1);
-        pubs["PointCloudObject"] = node_handle.advertise<sensor_msgs::PointCloud2>("/radar/point_cloud_object", 1);
-        pubs["PointCloudDetection"] = node_handle.advertise<sensor_msgs::PointCloud2>("/radar/point_cloud_detection", 1);
+        // //These are the publishers that send the data to Rviz2
+        // // auto directionPublisher=node->create_publisher<geometry_msgs::msg::PoseArray>("DirectionVelocity",10);
+        // // auto pubObj= node->create_publisher<sensor_msgs::msg::PointCloud2>("PointCloudObject",10);
+        // // auto pubDetect=node->create_publisher<sensor_msgs::msg::PointCloud2>("PointCloudDetection",10);
+        // pubs["DirectionVelocity"] = node_handle.advertise<geometry_msgs::PoseArray>("/radar/direction_velocity", 1);
+        // pubs["PointCloudObject"] = node_handle.advertise<sensor_msgs::PointCloud2>("/radar/point_cloud_object", 1);
+        // pubs["PointCloudDetection"] = node_handle.advertise<sensor_msgs::PointCloud2>("/radar/point_cloud_detection", 1);
+        // ====================================================
+        
+        //TODO: dynamic topic name
+        // 使用動態的 topic 名稱而不是硬編碼
+        pubs["Status"] = node_handle.advertise<ars548_messages::Status>(topic_prefix + "/status", 1);
+        pubs["ObjectList"] = node_handle.advertise<ars548_messages::ObjectList>(topic_prefix + "/object_list", 1);
+        pubs["DetectionList"] = node_handle.advertise<ars548_messages::DetectionList>(topic_prefix + "/detection_list", 1);
+        
+        pubs["DirectionVelocity"] = node_handle.advertise<geometry_msgs::PoseArray>(topic_prefix + "/direction_velocity", 1);
+        pubs["PointCloudObject"] = node_handle.advertise<sensor_msgs::PointCloud2>(topic_prefix + "/point_cloud_object", 1);
+        pubs["PointCloudDetection"] = node_handle.advertise<sensor_msgs::PointCloud2>(topic_prefix + "/point_cloud_detection", 1);
+        // ----------------------------------------------------
+
+
+
 
 
         //Create messages for the publishers
@@ -533,6 +552,31 @@ class Ars548_Driver {
         }
         struct sockaddr_in addr;
         u_int yes = 1;
+
+        //TODO: === 在這裡添加 SO_BINDTODEVICE 設定 ===
+        // 根據 radarInterface IP 決定使用哪個網路介面
+        std::string interface_name;
+        if (this->radarInterface == "10.13.1.166") {
+            interface_name = "radar1";  // 根據實際情況修改
+        } else if (this->radarInterface == "10.13.2.168") {
+            interface_name = "radar2";  // 根據實際情況修改
+        } else {
+            std::cerr << "Unknown radar interface: " << this->radarInterface << std::endl;
+            close(fd);
+            return 1;
+        }
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, 
+            interface_name.c_str(), interface_name.length()) < 0) {
+            perror("SO_BINDTODEVICE failed");
+            std::cerr << "Failed to bind to interface: " << interface_name << std::endl;
+            close(fd);
+            return 1;
+        }
+
+        std::cout << "Successfully bound to interface: " << interface_name << std::endl;
+        // === SO_BINDTODEVICE 設定結束 ===
+
+
         std::cout<<"AAAAAAA"<<std::endl;
         if (
             setsockopt(
@@ -548,13 +592,16 @@ class Ars548_Driver {
 	    perror("Set buffer size failed");
 	    close(fd);
 	}
-	struct timeval tv;
-	tv.tv_sec = 0;
-	tv.tv_usec = 500 * 1000;
-	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-	    perror("Failed to set socket timeout");
-	    close(fd);
-	}
+
+    //TODO: Stop timeout check
+	// struct timeval tv;
+	// tv.tv_sec = 0;
+	// tv.tv_usec = 500 * 1000;
+	// if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+	//     perror("Failed to set socket timeout");
+	//     close(fd);
+	// }
+
         std::cout<<"BBBBBBBBBBB"<<std::endl;
         // set up destination address
         //
@@ -573,7 +620,9 @@ class Ars548_Driver {
         //
         struct ip_mreq mreq;
         mreq.imr_multiaddr.s_addr = inet_addr(this->ars548_IP.c_str());
-        mreq.imr_interface.s_addr = inet_addr(RADAR_INTERFACE);
+        // mreq.imr_interface.s_addr = inet_addr(RADAR_INTERFACE);
+        mreq.imr_interface.s_addr = inet_addr(this->radarInterface.c_str()); // TODO: dynamic radar interface
+
         std::cout<<"CCCCCCCCCCCCCCCc"<<std::endl;
         if (
             setsockopt(
@@ -745,7 +794,8 @@ class Ars548_Driver {
     /**
      * @brief  ars548_driver Node. Used to try the driver. 
      */
-    Ars548_Driver(std::string radarIP, int radarPort, std::string frameID): modifierObject(cloud_msgObj),modifierDetection(cloud_msgDetect) {
+    
+    Ars548_Driver(std::string radarIP, std::string radarInterface, int radarPort, std::string frameID, std::string topic_prefix): modifierObject(cloud_msgObj),modifierDetection(cloud_msgDetect) {
         //Parameter declaration so the user can change them
         // this->declare_parameter("radarIP",DEFAULT_RADAR_IP);
         // this->declare_parameter("radarPort",DEFAULT_RADAR_PORT);
@@ -754,12 +804,21 @@ class Ars548_Driver {
         // this->ars548_IP=this->get_parameter("radarIP").as_string();
         // this->ars548_Port=this->get_parameter("radarPort").as_int();
         // this->frame_ID=this->get_parameter("frameID").as_string();
+
+
+
         this->ars548_IP = radarIP;
         this->ars548_Port = radarPort;
+        this->radarInterface = radarInterface;
         this->frame_ID = frameID;
+        this->topic_prefix = topic_prefix;
+
+
         std::cout<<"getting radar ip: " << this->ars548_IP<<std::endl;
+        std::cout<<"getting radar interface: " << this->radarInterface<<std::endl;
         std::cout<<"getting frameID: " << this->frame_ID<<std::endl;
         std::cout<<"getting radar port: " << this->ars548_Port<<std::endl;
+        std::cout << "getting topic prefix: " << this->topic_prefix << std::endl; // TODO: getting topic prefix
 
         //Creation of their modifiers
         

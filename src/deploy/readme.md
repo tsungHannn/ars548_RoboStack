@@ -192,4 +192,67 @@
 ![Screenshot from 2025-05-05 14-28-26_1](https://github.com/user-attachments/assets/8dec14b5-1774-4b88-848b-6c33a249644f)
 
 
+## 多裝置連線
+- 如果要連兩個 RSU (Radar+Camera)，要另外設定
+<img width="721" height="663" alt="圖片1" src="https://github.com/user-attachments/assets/25868c42-b5d3-45eb-a7b2-386e742f3275" />
+
+- `/etc/netplan/01-network-manager-all.yaml`
+   ```
+   # Let NetworkManager manage all devices on this system
+   network:
+     version: 2
+     renderer: NetworkManager
+     ethernets:
+       eno1:
+           dhcp4: false
+           dhcp6: false
+           addresses:
+           - 192.168.1.122/24
+           routes:
+           - to: default
+             via: 192.168.1.1
+       enp3s0:
+           dhcp4: false
+           dhcp6: false
+           addresses:
+           - 10.13.1.167/24
+       enp4s0f0:
+           dhcp4: false
+           dhcp6: false
+           addresses:
+           - 169.254.224.225/16
+       enp4s0f2:
+           dhcp4: false
+           dhcp6: false
+           addresses:
+           - 192.168.11.10/16
+       enp4s0f3:
+           dhcp4: false
+           dhcp6: false
+           addresses:
+             - 10.13.2.169/24
+   ```
+- `/src/ars548_ros-noetic/ars548_driver/src/ars548_driver_node.cpp` 裡面要改成用 multi-threading 來開兩個 Driver。
+```
+// 創建執行緒來運行每個 driver
+    std::thread thread1([&]() {
+        Ars548_Driver driver1("224.0.2.2", "10.13.1.166", 42102, "ARS_548", "/radar1");
+      // 參數: 雷達IP, 雷達Interface, 雷達Port, FieldName, TopicPrefix
+      // 之後發布的topic前面會有TopicPrefix，用來區分兩台雷達裝置
+    });
+    
+    std::thread thread2([&]() {
+        Ars548_Driver driver2("224.0.2.2", "10.13.2.168", 42102, "ARS_548", "/radar2");
+    });
+```
+- 連線:
+  1. 網卡設定: 
+      ```
+      echo "enp3s0" | sudo sh configurer1.sh
+      echo "enp4s0f3" | sudo sh configurer2.sh
+      ```
+   2. `python launch.py --stream`
+- 雷達 IP: 雷達發送的 IP 目標都是 `224.0.2.2`，所以要在 driver 裡面指定，用網卡名稱來決定讀取哪一台雷達的資訊。
+- 斷線問題: 因為雷達封包非常不穩定，如果掉太久原本的driver會直接抱錯，所以把Timeout的檢查刪掉了。
+- 相機: 如果stream_camera.py啟動失敗，可以開SpinView來看有沒有正確讀到攝影機。看完之後把SpinView關掉，再重新`python stream_camera.py`。
     

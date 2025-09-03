@@ -73,6 +73,7 @@ class ProjectorGUI:
         self.sample_interval_var = tk.StringVar(value="1")
 
         self.show_radar_trajectory = tk.BooleanVar(value=False) # 顯示雷達軌跡
+        self.calib_vis = tk.BooleanVar(value=False) # 顯示校正過程
         
         # Filter variables
         self.optimize_filter_var = tk.StringVar(value="不限")
@@ -217,7 +218,7 @@ class ProjectorGUI:
         
         ttk.Label(settings_frame, text="優化方法:").grid(row=0, column=0, sticky=tk.W, padx=5)
         method_combo = ttk.Combobox(settings_frame, textvariable=self.method_var,
-                                  values=["L-BFGS-B", "Powell", "Nelder-Mead", 'trust-constr'], width=12)
+                                  values=["L-BFGS-B", "Powell", "Nelder-Mead", 'trust-constr', 'Adam'], width=12)
         method_combo.grid(row=0, column=1, padx=5)
         
         ttk.Label(settings_frame, text="取樣間隔:").grid(row=0, column=2, sticky=tk.W, padx=5)
@@ -238,6 +239,10 @@ class ProjectorGUI:
         for i, (text, command) in enumerate(record_buttons):
             ttk.Button(record_frame, text=text, command=command, width=12).grid(
                 row=i//2, column=i%2, padx=5, pady=3, sticky=tk.EW)
+        
+        ttk.Checkbutton(record_frame, text="顯示校正過程", variable=self.calib_vis, 
+                        command=lambda: self.send_action("calib_vis")).grid(
+                        row=2, column=1, columnspan=2, padx=5, pady=3, sticky=tk.W)  
         
         record_frame.columnconfigure(0, weight=1)
         record_frame.columnconfigure(1, weight=1)
@@ -472,12 +477,13 @@ class ProjectorGUI:
         camera_filter_x = self.camera_filter_x_var.get()
         camera_filter_y = self.camera_filter_y_var.get()
         radar_trajectory = self.show_radar_trajectory.get()
+        calib_vis = self.calib_vis.get()
         
         payload = json.dumps([action, method, sample_interval, optimize_filter, 
-                            vx_filter, vy_filter, camera_filter_x, camera_filter_y, radar_trajectory])
+                            vx_filter, vy_filter, camera_filter_x, camera_filter_y, radar_trajectory, calib_vis])
         msg = String(data=payload)
         self.ros_node.optimize_action_pub.publish(msg)
-        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 雷達軌跡: {radar_trajectory}")
+        print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 雷達軌跡: {radar_trajectory}, 校正過程: {calib_vis}")
     
     def save_calibration(self):
         """Save current calibration to a file"""

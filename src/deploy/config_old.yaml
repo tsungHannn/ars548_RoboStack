@@ -1,39 +1,57 @@
 camera_topic: /aravis_cam/image_color
-radar_topic: /radar_filter
-
+radar_topic: /radar/point_cloud_object
 echo_topic: /traffic_echo
 track_topic: /traffic_track
 radar_project_topic: /traffic_radar_project
 optimize_target_topic: /traffic_optimize_target
 final_topic: /traffic_final
-
 fps: 20
 stats_interval_seconds: 15
 radar_track_enabled: false
 optimize: true
-
 model_enabled: true
 model:
-  path: yolo11m.pt
+  modality: camera
+  path: yolo11x.pt
+  config_path: configs/rtdetr/rtdetr_r50vd_6x_coco.yml
+  checkpoint_path: configs/checkpoints/num_class_5__remap_mscoco_False.pth
+  conf_thresh: 0.65
   classes:
-    - 1
-    - 2
-    - 3
-    - 4
-    - 5
-    - 6
-    - 7
-    - 8
-
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
 camera:
   extrinsic_matrix:
-    - [0.0017, -0.9999, 0.005, 0.117]
-    - [-0.1066, -0.005, -0.99, 4.707]
-    - [0.9942, 0.0011, -0.1066, -2.1814]
-    - [0, 0, 0, 1]
+  - - 0.008192027918994427
+    - -0.9981263279914856
+    - 0.060636330395936966
+    - 0.09321359544992447
+  - - -0.053390875458717346
+    - -0.06098845973610878
+    - -0.9967095255851747
+    - 5.23658561706543
+  - - 0.9985401034355165
+    - 0.0049276454374194145
+    - -0.05379045754671097
+    - -0.8668146729469299
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
   camera_matrix:
-    - [2413.911679, 0.000000, 1059.332971]
-    - [0.000000, 2161.173075, 745.776449]
-    - [0.000000, 0.000000, 1.000000]
+  - - 2413.911679
+    - 0.0
+    - 1059.332971
+  - - 0.0
+    - 2161.173075
+    - 745.776449
+  - - 0.0
+    - 0.0
+    - 1.0
   width: 2048
   height: 1536

@@ -43,6 +43,9 @@ from PIL import Image as PILImage
 import torchvision.transforms as T
 
 
+# mqtt
+from mqtt.mqtt_publisher import MQTTPublisher
+
 
 from ars548_messages.msg import ObjectList
 
@@ -87,6 +90,7 @@ class Detection:
 class TrafficStats:
     flow: int = 0
     mean_speed: float = 0
+    congestion_level: int = 0
 
 class TrafficMonitor():
     def __init__(self, config_path='config.yaml'):
@@ -206,6 +210,7 @@ class TrafficMonitor():
 
             self.radar_trajectory = set() # 儲存雷達點的軌跡，用set是因為要去除重複點
             self.show_radar_trajectory = False # 是否顯示雷達軌跡
+            self.calib_vis = True # 是否顯示校正過程
 
 
             # print("原始外參:", self.extrinsic_matrix)
@@ -228,7 +233,27 @@ class TrafficMonitor():
         
         self.radar_cls_list = ['car', 'truck', 'motorcycle', 'bicycle', 'pedestrian', 'animal', 'hazard', 'unknown']
 
+
+        # --- MQTT 相關設定 ---
+        self.MQTT_BROKER = "1e1524b3c6e044db8652edb65d6641a0.s1.eu.hivemq.cloud"
+        self.MQTT_PORT = 8883
+        self.MQTT_CLIENT_ID = "python_mqtt_sender"
+
+        # HiveMQ Cloud 帳號憑證
+        self.MQTT_USERNAME = "School_publisher"
+        self.MQTT_PASSWORD = "Abcd1234"
+
         
+        self.mqtt_publisher = MQTTPublisher(self.MQTT_BROKER, self.MQTT_PORT, self.MQTT_CLIENT_ID, self.MQTT_USERNAME, self.MQTT_PASSWORD)
+        try:
+            # 連接到 MQTT Broker
+            self.mqtt_publisher.connect()
+        except KeyboardInterrupt:
+            print("\n程式被手動終止。")
+        except Exception as e:
+            print(f"發生錯誤: {e}")
+        # finally:
+        #     self.mqtt_publisher.disconnect()
         
         self.setup_traffic_stats()
     
@@ -270,6 +295,8 @@ class TrafficMonitor():
         # Initialize stats storage
         self.stats_interval = rospy.Duration(self.config.stats_interval_seconds or 15.0)
         self.crossed_objects = set()
+        self.flow_threshold = [15, 30, 40]
+        self.speed_threshold = [40, 30, 20]
         self.reset_traffic_stats()
     
         self.center_y = self.config.camera.height // 3 * 2
@@ -664,6 +691,51 @@ class TrafficMonitor():
         if current_time - self.stats_start_time >= self.stats_interval:
             self.current_stats.mean_speed = np.mean(self.all_speeds)
             # stats_result = TrafficStats(flow=self.current_stats.flow, mean_speed=self.current_stats.mean_speed)
+
+
+            # 計算壅塞程度
+            score_f = -1
+            score_s = -1
+            if self.current_stats.flow <= self.flow_threshold[0]:
+                score_f = 1
+            elif self.current_stats.flow > self.flow_threshold[0] and self.current_stats.flow <= self.flow_threshold[1]:
+                score_f = 2
+            elif self.current_stats.flow > self.flow_threshold[1] and self.current_stats.flow <= self.flow_threshold[2]:
+                score_f = 3
+            elif self.current_stats.flow > self.flow_threshold[2]:
+                score_f = 4
+
+            if self.current_stats.mean_speed > self.speed_threshold[0]:
+                score_s = 1
+            elif self.current_stats.mean_speed <= self.speed_threshold[0] and self.current_stats.mean_speed > self.speed_threshold[1]:
+                score_s = 2
+            elif self.current_stats.mean_speed <= self.speed_threshold[1] and self.current_stats.mean_speed > self.speed_threshold[2]:
+                score_s = 3
+            elif self.current_stats.mean_speed <= self.speed_threshold[2]:
+                score_s = 4
+            
+            # if score_f == -1:
+            #     print("Error: 車流量")
+            # if score_s == -1:
+            #     print("Error: 平均車速")
+
+            congestion_score = (score_s + score_f) / 2
+            congestion_level = -1
+
+            if congestion_score <= 1.5:
+                congestion_level = 1
+            elif congestion_score > 1.5 and congestion_score <= 2.5:
+                congestion_level = 2
+            elif congestion_score > 2.5 and congestion_score <= 3.5:
+                congestion_level = 3
+            elif congestion_score > 3.5:
+                congestion_level = 4
+
+            self.current_stats.congestion_level = congestion_level
+
+            # mqtt
+            self.mqtt_publisher.publish_traffic_data(self.current_stats.flow, np.mean(self.all_speeds), self.current_stats.congestion_level)
+
             self.reset_traffic_stats(current_time)
 
     def vis_traffic_result(self, frame, objects):
@@ -716,6 +788,7 @@ class TrafficMonitor():
             camera_filter_x = command[6]
             camera_filter_y = command[7]
             show_radar_trajectory = command[8]
+            calib_vis = command[9]
         except Exception as e:
             rospy.logwarn(f"無法解析 optimize_command: {msg.data}, 錯誤: {e}")
             return
@@ -774,6 +847,9 @@ class TrafficMonitor():
         elif action == 'clear_trajectory':
             self.radar_trajectory.clear()
             rospy.loginfo("清除雷達軌跡")
+        elif action == 'calib_vis':
+            self.calib_vis = calib_vis
+            rospy.loginfo("校正視覺化: " + str(self.calib_vis))
 
 
 
@@ -988,7 +1064,7 @@ class TrafficMonitor():
             # projected = project_points(points_3d[:, :3], self.camera_intrinsic_matrix, extrinsic_matrix)
 
             
-            loss = self.compute_loss(extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=image, visualize=visualize)
+            loss = self.compute_loss(extrinsic_matrix, points_3d, bboxes, bboxes_id, up_ids, down_ids, left_ids, right_ids, image=image, visualize=self.calib_vis)
             total_loss += loss
 
 
@@ -1287,8 +1363,7 @@ class TrafficMonitor():
                         best_rotation = R
 
 
-                    visualize = False
-                    if visualize:
+                    if self.calib_vis:
                         # 可視化
                         if len(self.saved_filter_optimize_data) > 0:
                             # 用第一幀影像作背景
@@ -1414,6 +1489,11 @@ class TrafficMonitor():
         objects = self.fusion(frame.copy(), self.camera_id, boxes, ids, class_ids, points_2d, points_3d)
         self.flow_stats(objects)
 
+
+        
+
+
+
         fusion_frame = self.vis_traffic_result(radar_frame.copy(), objects)
         # camera_detection = self.vis_traffic_result(frame.copy(), objects)
         # self.pub_radar_project.publish(self.to_image_msg(fusion_frame, stamp))
@@ -1439,7 +1519,7 @@ class TrafficMonitor():
                 self.saved_optimize_data.append([points_3d, boxes, ids, frame.copy()])
             self.frame_count += 1
 
-        if self.optimize == True:
+        if self.optimize == True and len(self.saved_filter_optimize_data) > 0:
             start_time = rospy.Time.now()
             # 停止視覺化線程
             if self.vis_thread.is_alive():
@@ -1465,10 +1545,20 @@ class TrafficMonitor():
             normalized_bounds = [(0, 1)] * 7  # 7個參數都在 [0, 1] 範圍內
 
             print("開始優化, method:", self.optimize_method)
-            # 一開始的minimize方法
-            # result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
-            #                 args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
 
+            if self.optimize_method != 'Adam':
+                # 一開始的minimize方法
+                result = minimize(self.batch_optimization_loss, self.extrinsic_param_quat,
+                                args=(self.saved_filter_optimize_data, True), method=self.optimize_method, bounds=bounds)
+                result = result.x
+            elif self.optimize_method == 'Adam':
+                # Adam
+                result, adam_loss = self.trainer.train(self.saved_filter_optimize_data, initial_params=self.extrinsic_param_quat, epochs=1000, lr=0.01)
+                print(f"Adam優化完成，損失: {adam_loss:.6f}")
+                print("Adam優化參數:", result)
+                if adam_loss == float('inf') or result is None:
+                    rospy.logwarn("Adam優化失敗")
+                    result = self.extrinsic_param_quat
             # # 使用標準化參數的minimize方法
             # result = minimize(self.batch_optimization_loss_normalized, 
             #          normalized_initial_params,
@@ -1478,12 +1568,9 @@ class TrafficMonitor():
             # # 將優化結果轉回原始範圍
             # optimized_original_params = self.denormalize_params(result.x, bounds)
 
-            # Adam
-            adam_params, adam_loss = self.trainer.train(self.saved_filter_optimize_data, initial_params=self.extrinsic_param_quat, epochs=1000, lr=0.01)
-            print(f"Adam優化完成，損失: {adam_loss:.6f}")
-            print("Adam優化參數:", adam_params)
+           
             
-            self.extrinsic_matrix = self.transformation_matrix(adam_params)
+            self.extrinsic_matrix = self.transformation_matrix(result)
             end_time = rospy.Time.now()
             print("New extrinsic matrix:\n", self.extrinsic_matrix)
             # print("-"*20)

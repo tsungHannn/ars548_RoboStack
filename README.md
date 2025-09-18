@@ -2,3 +2,5 @@
 - [遠端連線](src/deploy/readme.md#設定遠端連線)
 - [相機-雷達校正](src/deploy/readme.md#相機-雷達校正)
 - [相機內參校正](src/deploy/readme.md#相機內參校正)
+- [多裝置連線](src/deploy/readme.md#多裝置連線)
+- [兩台電腦ROS連線](src/deploy/readme.md#兩台電腦ros連線)

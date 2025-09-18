@@ -2,12 +2,13 @@ import subprocess
 from argparse import ArgumentParser
 from time import sleep
 
-pre_commands = ['micromamba activate ros && source ~/ars548_RoboStack/devel/setup.bash']
+pre_commands = ['micromamba activate ros && source ~/workspace/ncsist/ars548_RoboStack/devel/setup.bash']
 pre_command = ' && '.join(pre_commands)
 commands = [
     ('rviz', 'rviz -d ./main.rviz'),
     ('image_transport', 'rosrun image_transport republish compressed in:=/aravis_cam/image_color raw out:=/aravis_cam/image_color'),
     ('main', 'python main.py'),
+    ('bev_ros', 'python BEV_test/bev_ros.py'),
 ]
 
 stream = [('stream_camera', 'python stream_camera.py'), 

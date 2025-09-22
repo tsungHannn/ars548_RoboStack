@@ -14,11 +14,13 @@ RTDETR:
 PResNet:
   depth: 50
   variant: d
-  freeze_at: 0
+  freeze_at: -1 #0 or -1(heatmap)
   return_idx: [1, 2, 3]
   num_stages: 4
-  freeze_norm: True
+  freeze_norm: False #True or False(heatmap)
   pretrained: True 
+  ############# heatmap
+  in_channels: 4
 
 HybridEncoder:
   in_channels: [512, 1024, 2048]

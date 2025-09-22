@@ -9,6 +9,8 @@ import copy
 
 from .config import BaseConfig
 from .yaml_utils import load_config, merge_config, create, merge_dict
+from datetime import datetime
+from pathlib import Path
 
 
 class YAMLConfig(BaseConfig):
@@ -29,6 +31,10 @@ class YAMLConfig(BaseConfig):
         self.tuning = cfg.get('tuning', '')
         self.sync_bn = cfg.get('sync_bn', False)
         self.output_dir = cfg.get('output_dir', None)
+
+        # ✅ 新增這段：在 output_dir 加上時間戳記
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_dir = Path(self.output_dir) / f"exp_{timestamp}"
         
         self.use_ema = cfg.get('use_ema', False)
         self.use_amp = cfg.get('use_amp', False)

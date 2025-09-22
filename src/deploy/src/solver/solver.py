@@ -61,6 +61,8 @@ class BaseSolver(object):
         self.setup()
         self.val_dataloader = dist.warp_loader(self.cfg.val_dataloader, \
             shuffle=self.cfg.val_dataloader.shuffle)
+        
+        print("shuffle: ",self.cfg.val_dataloader.shuffle)
 
         if self.cfg.resume:
             print(f'resume from {self.cfg.resume}')

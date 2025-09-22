@@ -19,11 +19,13 @@ train_dataloader:
         - {type: SanitizeBoundingBox, min_size: 1}
         - {type: ConvertBox, out_fmt: 'cxcywh', normalize: True}
   shuffle: True
-  batch_size: 4
+  batch_size: 2 #4 or 2(heatmap)
   num_workers: 4
   # collate_fn: default_collate_fn
   ################# RADAR #################
-  collate_fn: radar_collate_fn
+  # collate_fn: radar_collate_fn
+  collate_fn: radar_hm_collate_fn
+  # collate_fn: hm_collate_fn
 
 
 val_dataloader:
@@ -36,8 +38,10 @@ val_dataloader:
         - {type: ToImageTensor}
         - {type: ConvertDtype}
   shuffle: False
-  batch_size: 8
+  batch_size: 4 #8 or 4(heatmap)
   num_workers: 4
   # collate_fn: default_collate_fn
   ################# RADAR #################
-  collate_fn: radar_collate_fn
+  # collate_fn: radar_collate_fn
+  collate_fn: radar_hm_collate_fn
+  # collate_fn: hm_collate_fn

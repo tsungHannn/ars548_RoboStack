@@ -12,7 +12,7 @@ from src.data import get_coco_api_from_dataset
 
 from .solver import BaseSolver
 from .det_engine import train_one_epoch, evaluate
-# from torchinfo import summary
+from torchinfo import summary
 
 class DetSolver(BaseSolver):
     
@@ -101,6 +101,7 @@ class DetSolver(BaseSolver):
                 self.val_dataloader, base_ds, self.device, self.output_dir)
                 
         if self.output_dir:
-            dist.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+            # dist.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+            print(self.output_dir)
         
         return

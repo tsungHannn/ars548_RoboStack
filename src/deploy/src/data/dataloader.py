@@ -36,3 +36,20 @@ def radar_collate_fn(items):
     imgs = torch.stack(imgs, dim=0)      # 假設尺寸一致
     radars = list(radars)                # 不同圖像的 radar 數量可不同
     return imgs, radars, list(targets)
+
+############## RADAR + heatmap ##############
+@register
+def radar_hm_collate_fn(items):
+    imgs, hm, radars, targets = zip(*items)  # 對應 img, radar_feats, target
+    imgs = torch.stack(imgs, dim=0)      # 假設尺寸一致
+    hm = torch.stack(hm, dim=0)      # 假設尺寸一致
+    radars = list(radars)                # 不同圖像的 radar 數量可不同
+    return imgs, hm, radars, list(targets)
+
+############## RADAR + heatmap ##############
+@register
+def hm_collate_fn(items):
+    imgs, hm, targets = zip(*items)  # 對應 img, radar_feats, target
+    imgs = torch.stack(imgs, dim=0)      # 假設尺寸一致
+    hm = torch.stack(hm, dim=0)      # 假設尺寸一致
+    return imgs, hm, list(targets)

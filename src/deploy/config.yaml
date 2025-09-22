@@ -11,10 +11,10 @@ radar_track_enabled: false
 optimize: true
 model_enabled: true
 model:
-  modality: camera
+  modality: camera+radar
   path: yolo11x.pt
   config_path: configs/rtdetr/rtdetr_r50vd_6x_coco.yml
-  checkpoint_path: configs/checkpoints/num_class_5__remap_mscoco_False.pth
+  checkpoint_path: configs/checkpoints/checkpoint0035.pth
   conf_thresh: 0.65
   classes:
   - 1

@@ -16,6 +16,7 @@ import sensor_msgs.point_cloud2 as pc2
 
 import cv2
 import torch
+from torch.cuda.amp import autocast
 import os
 import numpy as np
 # 設定numpy seed
@@ -149,6 +150,7 @@ class TrafficMonitor():
                 ])
 
                 # === 模型初始化 ===
+                print("config_path:", self.config_path, "checkpoint_path:", self.checkpoint_path)
                 self.model = self.load_model(self.config_path, self.checkpoint_path)
                 self.model.eval()
                 rospy.loginfo(f'Model modality: {self.config.model.modality}, Model loaded on device {self.device}')
@@ -398,8 +400,8 @@ class TrafficMonitor():
                 self.model = cfg.model.deploy()
                 self.postprocessor = cfg.postprocessor.deploy()
 
-            def forward(self, images, orig_target_sizes, radar_feats):
-                outputs = self.model(images, radar_feats)
+            def forward(self, images, heatmaps, orig_target_sizes, radar_feats):
+                outputs = self.model(images, heatmaps, radar_feats)
                 return self.postprocessor(outputs, orig_target_sizes)
 
         return ModelWrapper().to(self.device)
@@ -467,11 +469,60 @@ class TrafficMonitor():
             
         return boxes, track_ids, class_ids, annotated_frame
     
+
+    def _make_heatmap(self, H, W, uv_norm_np, sigma_rel=0.015, max_radius=48, alpha=0.65, weights=None):
+        uv = uv_norm_np.copy()
+        if uv.size == 0:
+            return np.zeros((H, W), dtype=np.float32)
+
+        uv[:, 0] = np.clip(uv[:, 0], 0.0, 1.0) * W
+        uv[:, 1] = np.clip(uv[:, 1], 0.0, 1.0) * H
+
+        hm = np.zeros((H, W), dtype=np.float32)
+
+        sigma_px = float(sigma_rel) * max(H, W)
+        R = int(np.clip(3.0 * sigma_px, 6, max_radius))
+
+        y, x = np.mgrid[-R:R+1, -R:R+1]
+        g = np.exp(-(x*x + y*y) / (2.0 * sigma_px * sigma_px)).astype(np.float32)
+        g *= float(alpha)
+
+        if weights is None:
+            weights = np.ones((uv.shape[0],), dtype=np.float32)
+        else:
+            weights = np.clip(weights.astype(np.float32), 0.0, 1.0)
+
+        for (cx, cy), w in zip(uv, weights):
+            x0, y0 = int(round(cx)) - R, int(round(cy)) - R
+            x1, y1 = x0 + g.shape[1], y0 + g.shape[0]
+
+            ix0, iy0 = max(0, x0), max(0, y0)
+            ix1, iy1 = min(W, x1), min(H, y1)
+            if ix0 >= ix1 or iy0 >= iy1:
+                continue
+
+            gx0, gy0 = ix0 - x0, iy0 - y0
+            gx1, gy1 = gx0 + (ix1 - ix0), gy0 + (iy1 - iy0)
+
+            patch = g[gy0:gy1, gx0:gx1] * w
+            hm[iy0:iy1, ix0:ix1] = np.maximum(hm[iy0:iy1, ix0:ix1], patch)
+
+        return np.clip(hm, 0.0, 1.0)
+
+
     # 雷達+相機物件偵測
-    def detect_object_with_radar(self, image, radar_msg):
+    def detect_object_with_radar(self, image, radar_msg, extrinsic_matrix):
 
         data = numpify(radar_msg) # (n * 7) [x y z vx vy id cls]
         points = np.stack([data[f] for f in ['x', 'y', 'z', 'vx', 'vy']], axis=1, dtype=np.float32)
+
+        # fix z to 1
+        points[:, 2] = 1
+        v = np.linalg.norm(points[:, 3:5], axis=1)
+        dist = np.linalg.norm(points[:, 0:2], axis=1)
+        points = points[np.logical_and(v > 2.0, dist < 100)]
+        points_2d = project_points(points[:, :3], self.camera_intrinsic_matrix, extrinsic_matrix)
+        points_2d_with_v = np.hstack([points_2d, points[:, 3:5]]).astype(np.float32)  # (n, 4) [u, v, vx, vy]
 
         # Step 1: 預處理        
         if isinstance(image, np.ndarray):
@@ -486,18 +537,43 @@ class TrafficMonitor():
         # pil_image = PILImage.fromarray(image)
         orig_size = torch.tensor([[pil_image.width, pil_image.height]]).to(self.device)
         image_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
-        
-        if len(points) == 0:
-            # 如果雷達點數為0，製作一個空的radar_feats
-            radar_feats = torch.zeros((1, 7), device=self.device)
+
+
+        # ---------- 生成 heatmap ----------
+        orig_w, orig_h = pil_image.width, pil_image.height
+
+        H, W = image_tensor.shape[-2], image_tensor.shape[-1]   # 640, 640
+
+
+        if points_2d_with_v.shape[0] > 0:
+            u_norm = np.clip(points_2d_with_v[:, 0] / max(orig_w, 1), 0.0, 1.0)
+            v_norm = np.clip(points_2d_with_v[:, 1] / max(orig_h, 1), 0.0, 1.0)
+            uv_norm = np.stack([u_norm, v_norm], axis=1).astype(np.float32)
+
+            vx, vy = points_2d_with_v[:, 2], points_2d_with_v[:, 3]
+            speed = np.sqrt(vx**2 + vy**2)
+            w = np.clip(speed / 5.0, 0.0, 1.0).astype(np.float32)
         else:
-            radar_feats = torch.stack([torch.from_numpy(r).to(self.device) for r in points], dim=0)
+            uv_norm = np.zeros((0, 2), dtype=np.float32)
+            w = None
+
+        hm_np = self._make_heatmap(H, W, uv_norm, sigma_rel=0.02, max_radius=48, alpha=0.65, weights=w)
+        radar_heatmap = torch.from_numpy(hm_np)[None, None].to(self.device, dtype=image_tensor.dtype)
+
+
+
+        
+        if len(points_2d_with_v) == 0:
+            # 如果雷達點數為0，製作一個空的radar_feats
+            radar_feats = torch.zeros((1, 4), device=self.device)
+        else:
+            radar_feats = torch.stack([torch.from_numpy(r).to(self.device) for r in points_2d_with_v], dim=0)
         radar_feats = radar_feats.unsqueeze(0)  # 增加 batch 維度
 
 
 
-        with torch.no_grad():
-            labels, boxes, scores = self.model(image_tensor, orig_size, radar_feats)
+        with torch.no_grad(), autocast():
+            labels, boxes, scores = self.model(image_tensor, radar_heatmap, orig_size, radar_feats)
 
         labels = labels[0].cpu().numpy()
         boxes = boxes[0].cpu().numpy()
@@ -1467,7 +1543,7 @@ class TrafficMonitor():
                 if len(boxes):
                     self.pub_track.publish(self.to_image_msg(track_frame, stamp))
             elif self.config.model.modality == 'camera+radar':
-                boxes, ids, class_ids, track_frame = self.detect_object_with_radar(frame.copy(), radar_msg)
+                boxes, ids, class_ids, track_frame = self.detect_object_with_radar(frame.copy(), radar_msg, self.extrinsic_matrix)
         else:
             boxes, ids, class_ids = [], [], []
             radar_frame = frame.copy()

@@ -6,7 +6,8 @@ pre_commands = ['micromamba activate ros && source ~/ars548_RoboStack/devel/setu
 pre_command = ' && '.join(pre_commands)
 commands = [
     ('rviz', 'rviz -d ./main.rviz'),
-    ('image_transport', 'rosrun image_transport republish compressed in:=/aravis_cam1/image_color raw out:=/aravis_cam1/image_color'),
+    ('image_transport1', 'rosrun image_transport republish compressed in:=/aravis_cam1/image_color raw out:=/aravis_cam1/image_color'),
+    ('image_transport2', 'rosrun image_transport republish compressed in:=/aravis_cam2/image_color raw out:=/cam2_decompressed'),
     ('main', 'python main.py'),
     ('bev_ros', 'python BEV_test/bev_ros.py'),
 ]

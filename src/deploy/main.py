@@ -95,7 +95,7 @@ class TrafficStats:
 
 class TrafficMonitor():
     def __init__(self, config_path='config.yaml'):
-        rospy.init_node('traffic_monitor')
+        rospy.init_node('traffic_monitor1')
         self.setup_parameters(config_path)
         self.setup_topics()
 

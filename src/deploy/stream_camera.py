@@ -11,7 +11,7 @@ from rotpy.system import SpinSystem
 class SpinnakerCameraNode:
     def __init__(self):
         # Initialize ROS node
-        rospy.init_node('flir_camera_node', anonymous=True)
+        rospy.init_node('flir_camera_node1', anonymous=True)
         
         # Set up ROS publisher
         self.image_pub = rospy.Publisher('/aravis_cam1/image_color', Image, queue_size=10)

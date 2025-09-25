@@ -1,17 +1,17 @@
-camera_topic: /aravis_cam/image_color
-radar_topic: /radar/point_cloud_object
-echo_topic: /traffic_echo
-track_topic: /traffic_track
-radar_project_topic: /traffic_radar_project
-optimize_target_topic: /traffic_optimize_target
-final_topic: /traffic_final
+camera_topic: /aravis_cam1/image_color
+radar_topic: /radar1/point_cloud_object
+echo_topic: /traffic_echo1
+track_topic: /traffic_track1
+radar_project_topic: /traffic_radar_project1
+optimize_target_topic: /traffic_optimize_target1
+final_topic: /traffic_final1
 fps: 20
 stats_interval_seconds: 15
 radar_track_enabled: false
 optimize: true
 model_enabled: true
 model:
-  modality: camera+radar
+  modality: camera
   path: yolo11x.pt
   config_path: configs/rtdetr/rtdetr_r50vd_6x_coco.yml
   checkpoint_path: configs/checkpoints/checkpoint0035.pth

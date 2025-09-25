@@ -272,20 +272,20 @@ class TrafficMonitor():
         self.pub_radar_project = rospy.Publisher(self.config.radar_project_topic, Image, queue_size=2)
         self.pub_final = rospy.Publisher(self.config.final_topic, Image, queue_size=2)
 
-        self.pub_radar_original = rospy.Publisher("/radar_original_project", Image, queue_size=1)
-        self.pub_range = rospy.Publisher("/radar_range", MarkerArray, queue_size=1)
-        self.pub_radar_filter = rospy.Publisher('/radar_filter', PointCloud2, queue_size=1)
-        self.pub_radar_xyz_vxvy_id = rospy.Publisher('/radar_object_xyz_vxvy_id', PointCloud2, queue_size=1)
-        self.pub_radar_marker = rospy.Publisher('/radar_marker', MarkerArray, queue_size=1)
-        self.pub_matrix = rospy.Publisher('/radar/extrinsic_matrix', Float32MultiArray, queue_size=1)
+        self.pub_radar_original = rospy.Publisher("/radar1_original_project", Image, queue_size=1)
+        self.pub_range = rospy.Publisher("/radar1_range", MarkerArray, queue_size=1)
+        self.pub_radar_filter = rospy.Publisher('/radar1_filter', PointCloud2, queue_size=1)
+        self.pub_radar_xyz_vxvy_id = rospy.Publisher('/radar1_object_xyz_vxvy_id', PointCloud2, queue_size=1)
+        self.pub_radar_marker = rospy.Publisher('/radar1_marker', MarkerArray, queue_size=1)
+        self.pub_matrix = rospy.Publisher('/radar1/extrinsic_matrix', Float32MultiArray, queue_size=1)
 
         # control topics
         self.sub_matrix = rospy.Subscriber('/control/matrix', Float32MultiArray, self.matrix_callback)
         self.sub_optimize_action = rospy.Subscriber('/control/optimize_action', String, self.control_callback)
         self.sub_intrinsic = rospy.Subscriber('/control/camera_intrinsic', Float32MultiArray, self.intrinsic_callback)
 
-        self.radar_pc = message_filters.Subscriber('/radar/point_cloud_object', PointCloud2)
-        self.radar_obj = message_filters.Subscriber('/radar/object_list', ObjectList) # ARS548 object_list
+        self.radar_pc = message_filters.Subscriber('/radar1/point_cloud_object', PointCloud2)
+        self.radar_obj = message_filters.Subscriber('/radar1/object_list', ObjectList) # ARS548 object_list
         self.sync = message_filters.ApproximateTimeSynchronizer([self.radar_pc, self.radar_obj], queue_size=1, slop=0.1)
         self.sync.registerCallback(self.radar_filter)
 

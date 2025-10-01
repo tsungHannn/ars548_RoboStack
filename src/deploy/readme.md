@@ -4,7 +4,6 @@
 - [兩台電腦ROS連線](#兩台電腦ros連線)
 - [相機內參校正](#相機內參校正)
 - [單IPC連接多RSU](#單ipc連接多rsu)
-- [test](#連線錄製流程)
 
 
 
@@ -259,6 +258,27 @@
    ```
 4. 在 ncsist1 的 RVIZ 畫面中看到不同 RSU 的畫面並錄製 ROS Bag
 
+### 切換回單 RSU 連線
+目前設定是必須兩台 IPC 連線才能順利執行，如果只需要一台電腦+一組 RSU 需另外設定
+1. 修改 `.bashrc`
+   ```
+   vim ~/.bashrc
+   # 註解掉最後兩行:
+   # export ROS_HOSTNAME=ncsist1
+   # export ROS_MASTER_URI=http://192.168.2.10:11311
+   ```
+2. 重新開啟 Terminal
+3. [開啟程式](#連線錄製流程)
+   ```
+   ros
+   cd ars548_RoboStack
+   echo "enp3s0" | sudo sh configurer.sh
+   python launch.py --stream
+   ```
+   > ncsist2 的 launch.py 裡面沒有執行 roscore，所以如果要用 ncsist2 執行單裝置連接，在執行 launch.py 之前要先執行 roscore
+
+
+   
 ## 單IPC連接多RSU
 - 如果要連兩個 RSU (Radar+Camera)，要另外設定
 <img width="721" height="663" alt="圖片1" src="https://github.com/user-attachments/assets/25868c42-b5d3-45eb-a7b2-386e742f3275" />

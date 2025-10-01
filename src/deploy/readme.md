@@ -1,9 +1,11 @@
 - [雷達、攝影機環境建置](#雷達攝影機環境建置)
 - [設定遠端連線:](#設定遠端連線)
 - [相機-雷達校正](#相機-雷達校正)
-- [相機內參校正](#相機內參校正)
-- [多裝置連線](#多裝置連線)
 - [兩台電腦ROS連線](#兩台電腦ros連線)
+- [相機內參校正](#相機內參校正)
+- [單IPC連接多RSU](#單ipc連接多rsu)
+- [test](#連線錄製流程)
+
 
 
 ## 雷達、攝影機環境建置
@@ -193,8 +195,71 @@
 使用不同角度拍攝棋盤格，之後按下 CALIBRATE 按鈕後，校正結果會在 Terminal：
 ![Screenshot from 2025-05-05 14-28-26_1](https://github.com/user-attachments/assets/8dec14b5-1774-4b88-848b-6c33a249644f)
 
+    
+## 兩台電腦ROS連線
+- 用網路線連接兩台電腦，就可以分別連接雷達，避免兩台雷達連接同一台電腦，造成 ip conflict。
+- 以下範例連接兩台電腦: ncsist1 與 ncsist2
+- 網路孔 
+<img width="679" height="565" alt="圖片1" src="https://github.com/user-attachments/assets/6ebcec68-c7a7-4917-b136-21d229cba3f3" />
 
-## 多裝置連線
+### 設定
+1. 網路線連接後，修改 ip 位置: ncsist1 改為 `192.168.2.10`；ncsist2 改為 `192.168.2.11`，如圖
+   <img width="574" height="441" alt="image" src="https://github.com/user-attachments/assets/4df61502-8e9e-443c-b2c6-dfcebebd7685" />
+
+1. 修改路徑/etc/hosts: `sudo vim /etc/hosts`
+   - 新增內網ip與名稱 (**名稱都不能重複**)，如下: 新增 `192.168.2.10 ncsist1` 跟 `192.168.2.11 ncsist2`
+      ```
+      127.0.0.1       localhost
+      127.0.1.1       ncsist-MIC-770V3W
+      
+      192.168.2.10 ncsist1
+      192.168.2.11 ncsist2
+      
+      # The following lines are desirable for IPv6 capable hosts
+      ::1     ip6-localhost ip6-loopback
+      fe00::0 ip6-localnet
+      ff00::0 ip6-mcastprefix
+      ff02::1 ip6-allnodes
+      ff02::2 ip6-allrouters
+      ```
+   - 兩台電腦都要設定
+2. 修改.bashrc: `vim ~/.bashrc`
+   - 新增 `ROS_HOSTNAME` 跟 `ROS_MASTER_URI`，其中 `ROS_HOSTNAME` 是當前電腦的名稱，`ROS_MASTER_URI` 是主要主機的ip(即要進行roscore的主機)。
+   - 範例: 用 ncsist1 這台電腦作為 Master。
+     在 ncsist1 的 .bashrc 加上:
+     ```
+     export ROS_HOSTNAME=ncsist1
+     export ROS_MASTER_URI=http://192.168.2.10:11311
+     ```
+   - 在 ncsist2 的 .bashrc 加上:
+     ```
+     export ROS_HOSTNAME=ncsist2
+     export ROS_MASTER_URI=http://192.168.2.10:11311
+     ```
+3. 兩台電腦都執行 `source ~/.bashrc`
+4. 在 ncsist1 上執行 `roscore` 之後，另一台電腦就可以直接連上了
+   > 在 ncsist2 上直接執行 `rostopic list` 就可以看到目前的 topic，不用 `roscore`
+
+### 連線、錄製流程
+1. 兩台電腦各別連接雷達、相機
+2. 在 ncsist1 啟動程式 → roscore、發布雷達跟相機的 topic
+   ```
+   ros
+   cd ars548_RoboStack
+   echo "enp3s0" | sudo sh configurer.sh
+   python launch.py --stream
+   ```
+3. 在 ncsist2 啟動程式 → 發布雷達跟相機的 topic
+   ```
+   # 跟ncsist1的啟動方式一樣
+   ros
+   cd ars548_RoboStack
+   echo "enp3s0" | sudo sh configurer.sh
+   python launch.py --stream
+   ```
+4. 在 ncsist1 的 RVIZ 畫面中看到不同 RSU 的畫面並錄製 ROS Bag
+
+## 單IPC連接多RSU
 - 如果要連兩個 RSU (Radar+Camera)，要另外設定
 <img width="721" height="663" alt="圖片1" src="https://github.com/user-attachments/assets/25868c42-b5d3-45eb-a7b2-386e742f3275" />
 
@@ -257,43 +322,3 @@
 - 雷達 IP: 雷達發送的 IP 目標都是 `224.0.2.2`，所以要在 driver 裡面指定，用網卡名稱來決定讀取哪一台雷達的資訊。
 - 斷線問題: 因為雷達封包非常不穩定，如果掉太久原本的driver會直接抱錯，所以把Timeout的檢查刪掉了。
 - 相機: 如果stream_camera.py啟動失敗，可以開SpinView來看有沒有正確讀到攝影機。看完之後把SpinView關掉，再重新`python stream_camera.py`。
-
-    
-## 兩台電腦ROS連線
-- 用網路線連接兩台電腦，就可以分別連接雷達，避免兩台雷達連接同一台電腦，造成 ip conflict。
-- 以下範例連接兩台電腦: ncsist1 與 mvclab1
-1. 網路線連接後，修改 ip 位置: ncsist1 改為 `192.168.2.10`；mvclab1 改為 `192.168.2.11`，如圖
-   <img width="574" height="441" alt="image" src="https://github.com/user-attachments/assets/4df61502-8e9e-443c-b2c6-dfcebebd7685" />
-
-1. 修改路徑/etc/hosts: `sudo vim /etc/hosts`
-   - 新增內網ip與名稱 (**名稱都不能重複**)，如下: 新增 `192.168.2.10 ncsist1` 跟 `192.168.2.11 mvclab1`
-      ```
-      127.0.0.1       localhost
-      127.0.1.1       ncsist-MIC-770V3W
-      
-      192.168.2.10 ncsist1
-      192.168.2.11 mvclab1
-      
-      # The following lines are desirable for IPv6 capable hosts
-      ::1     ip6-localhost ip6-loopback
-      fe00::0 ip6-localnet
-      ff00::0 ip6-mcastprefix
-      ff02::1 ip6-allnodes
-      ff02::2 ip6-allrouters
-      ```
-   - 兩台電腦都要設定
-2. 修改.bashrc: `vim ~/.bashrc`
-   - 新增 `ROS_HOSTNAME` 跟 `ROS_MASTER_URI`，其中 `ROS_HOSTNAME` 是當前電腦的名稱，`ROS_MASTER_URI` 是主要主機的ip(即要進行roscore的主機)。
-   - 範例: 用 ncsist1 這台電腦作為 Master。
-     在 ncsist1 的 .bashrc 加上:
-     ```
-     export ROS_HOSTNAME=ncsist1
-     export ROS_MASTER_URI=http://192.168.2.10:11311
-     ```
-   - 在 mvclab1 的 .bashrc 加上:
-     ```
-     export ROS_HOSTNAME=mvclab1
-     export ROS_MASTER_URI=http://192.168.2.10:11311
-     ```
-3. 兩台電腦都執行 `source ~/.bashrc`
-4. 在 ncsist1 上執行 `roscore` 之後，另一台電腦就可以直接連上了

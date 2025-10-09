@@ -1,9 +1,13 @@
 camera_topic: /cam2_decompressed
 radar_topic: /radar2/point_cloud_object
 radar_prefix: /radar2
+# echo_topic: /traffic_echo1
 track_topic: /traffic_track2
-detection_prefix: /detection2
+detection_prefix: /detection2 # 發布給BEV用
+# control_topic: /control_matrix2
 control_prefix: /control2
+# radar_project_topic: /traffic_radar_project1
+# optimize_target_topic: /traffic_optimize_target1
 final_topic: /traffic_final2
 mqtt_enable: false
 bev_enable: true
@@ -30,17 +34,17 @@ model:
   - 8
 camera:
   extrinsic_matrix:
-  - - -0.026704312555487268
+  - - -0.02446266658172008
     - -0.9994928600208532
-    - 0.017345657691629345
+    - 0.020385536380677596
     - -0.040298618376255035
-  - - 0.004584170059271198
+  - - -0.11383272437059197
     - -0.017474107478906632
-    - -0.999836819795533
+    - -0.9933462597183046
     - 4.999998569488525
-  - - 0.9996328892794589
+  - - 0.9931987397690962
     - -0.02662043908827751
-    - 0.00504847898480682
+    - -0.11334753544006711
     - -0.5
   - - 0.0
     - 0.0
@@ -58,3 +62,4 @@ camera:
     - 1.0
   width: 2048
   height: 1536
+

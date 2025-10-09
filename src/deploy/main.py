@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 import rospy
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Float32MultiArray, String, Int32MultiArray
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from visualization_msgs.msg import MarkerArray, Marker
 from std_msgs.msg import Header, ColorRGBA
@@ -29,10 +29,11 @@ from tqdm import tqdm
 
 
 from adam_optimize import AdamCalibrationTrainer
-
+from BEV_test.bev_ros_point import BEVIntegrationNode
 
 # import keyboard
 import threading
+from multiprocessing import Process # 多RSU
 
 from utils import json_to_object, yaml_to_object
 
@@ -95,7 +96,7 @@ class TrafficStats:
 
 class TrafficMonitor():
     def __init__(self, config_path='config.yaml'):
-        rospy.init_node('traffic_monitor1')
+        rospy.init_node('traffic_monitor', anonymous=True)
         self.setup_parameters(config_path)
         self.setup_topics()
 
@@ -138,6 +139,7 @@ class TrafficMonitor():
                 self.model = YOLO(self.config.model.path)
                 if torch.cuda.is_available():
                     self.model.to(torch.device('cuda'))
+                
                 rospy.loginfo(f'Model modality: {self.config.model.modality}, Model loaded on device {self.model.device}')
             elif self.config.model.modality == 'camera+radar': # 多模態物件偵測(RT-DETR)
                 self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -236,26 +238,27 @@ class TrafficMonitor():
         self.radar_cls_list = ['car', 'truck', 'motorcycle', 'bicycle', 'pedestrian', 'animal', 'hazard', 'unknown']
 
 
-        # --- MQTT 相關設定 ---
-        self.MQTT_BROKER = "1e1524b3c6e044db8652edb65d6641a0.s1.eu.hivemq.cloud"
-        self.MQTT_PORT = 8883
-        self.MQTT_CLIENT_ID = "python_mqtt_sender"
+        if self.config.mqtt_enable:
+            # --- MQTT 相關設定 ---
+            self.MQTT_BROKER = "1e1524b3c6e044db8652edb65d6641a0.s1.eu.hivemq.cloud"
+            self.MQTT_PORT = 8883
+            self.MQTT_CLIENT_ID = "python_mqtt_sender"
 
-        # HiveMQ Cloud 帳號憑證
-        self.MQTT_USERNAME = "School_publisher"
-        self.MQTT_PASSWORD = "Abcd1234"
+            # HiveMQ Cloud 帳號憑證
+            self.MQTT_USERNAME = "School_publisher"
+            self.MQTT_PASSWORD = "Abcd1234"
 
-        
-        self.mqtt_publisher = MQTTPublisher(self.MQTT_BROKER, self.MQTT_PORT, self.MQTT_CLIENT_ID, self.MQTT_USERNAME, self.MQTT_PASSWORD)
-        try:
-            # 連接到 MQTT Broker
-            self.mqtt_publisher.connect()
-        except KeyboardInterrupt:
-            print("\n程式被手動終止。")
-        except Exception as e:
-            print(f"發生錯誤: {e}")
-        # finally:
-        #     self.mqtt_publisher.disconnect()
+            
+            self.mqtt_publisher = MQTTPublisher(self.MQTT_BROKER, self.MQTT_PORT, self.MQTT_CLIENT_ID, self.MQTT_USERNAME, self.MQTT_PASSWORD)
+            try:
+                # 連接到 MQTT Broker
+                self.mqtt_publisher.connect()
+            except KeyboardInterrupt:
+                print("\n程式被手動終止。")
+            except Exception as e:
+                print(f"發生錯誤: {e}")
+            # finally:
+            #     self.mqtt_publisher.disconnect()
         
         self.setup_traffic_stats()
     
@@ -269,23 +272,30 @@ class TrafficMonitor():
 
         # self.pub_echo = rospy.Publisher(self.config.echo_topic, Image, queue_size=2)
         self.pub_track = rospy.Publisher(self.config.track_topic, Image, queue_size=2)
-        self.pub_radar_project = rospy.Publisher(self.config.radar_project_topic, Image, queue_size=2)
+        # self.pub_radar_project = rospy.Publisher(self.config.radar_project_topic, Image, queue_size=2)
         self.pub_final = rospy.Publisher(self.config.final_topic, Image, queue_size=2)
 
-        self.pub_radar_original = rospy.Publisher("/radar1_original_project", Image, queue_size=1)
-        self.pub_range = rospy.Publisher("/radar1_range", MarkerArray, queue_size=1)
-        self.pub_radar_filter = rospy.Publisher('/radar1_filter', PointCloud2, queue_size=1)
-        self.pub_radar_xyz_vxvy_id = rospy.Publisher('/radar1_object_xyz_vxvy_id', PointCloud2, queue_size=1)
-        self.pub_radar_marker = rospy.Publisher('/radar1_marker', MarkerArray, queue_size=1)
-        self.pub_matrix = rospy.Publisher('/radar1/extrinsic_matrix', Float32MultiArray, queue_size=1)
+        self.pub_radar_original = rospy.Publisher(self.config.radar_prefix+"_original_project", Image, queue_size=1)
+        self.pub_range = rospy.Publisher(self.config.radar_prefix+"_range", MarkerArray, queue_size=1)
+        self.pub_radar_filter = rospy.Publisher(self.config.radar_prefix+'_filter', PointCloud2, queue_size=1)
+        self.pub_radar_xyz_vxvy_id = rospy.Publisher(self.config.radar_prefix+'_object_xyz_vxvy_id', PointCloud2, queue_size=1)
+        self.pub_radar_marker = rospy.Publisher(self.config.radar_prefix+'_marker', MarkerArray, queue_size=1)
+        self.pub_matrix = rospy.Publisher(self.config.radar_prefix+'/extrinsic_matrix', Float32MultiArray, queue_size=1)
 
         # control topics
-        self.sub_matrix = rospy.Subscriber('/control/matrix', Float32MultiArray, self.matrix_callback)
-        self.sub_optimize_action = rospy.Subscriber('/control/optimize_action', String, self.control_callback)
-        self.sub_intrinsic = rospy.Subscriber('/control/camera_intrinsic', Float32MultiArray, self.intrinsic_callback)
+        self.sub_matrix = rospy.Subscriber(self.config.control_prefix+"_matrix", Float32MultiArray, self.matrix_callback)
+        self.sub_optimize_action = rospy.Subscriber(self.config.control_prefix+'/optimize_action', String, self.control_callback)
+        self.sub_intrinsic = rospy.Subscriber(self.config.control_prefix+'/camera_intrinsic', Float32MultiArray, self.intrinsic_callback)
 
-        self.radar_pc = message_filters.Subscriber('/radar1/point_cloud_object', PointCloud2)
-        self.radar_obj = message_filters.Subscriber('/radar1/object_list', ObjectList) # ARS548 object_list
+        # BEV topics
+        self.pub_boxes = rospy.Publisher(self.config.detection_prefix + '/boxes', Float32MultiArray, queue_size=1)
+        self.pub_ids = rospy.Publisher(self.config.detection_prefix + '/track_ids', Int32MultiArray, queue_size=1)
+        self.pub_class_ids = rospy.Publisher(self.config.detection_prefix + '/class_ids', Int32MultiArray, queue_size=1)
+        self.pub_points_2d = rospy.Publisher(self.config.detection_prefix + '/points_2d', Float32MultiArray, queue_size=1)
+
+
+        self.radar_pc = message_filters.Subscriber(self.config.radar_prefix+'/point_cloud_object', PointCloud2)
+        self.radar_obj = message_filters.Subscriber(self.config.radar_prefix+'/object_list', ObjectList) # ARS548 object_list
         self.sync = message_filters.ApproximateTimeSynchronizer([self.radar_pc, self.radar_obj], queue_size=1, slop=0.1)
         self.sync.registerCallback(self.radar_filter)
 
@@ -809,8 +819,9 @@ class TrafficMonitor():
 
             self.current_stats.congestion_level = congestion_level
 
-            # mqtt 
-            self.mqtt_publisher.publish_traffic_data(self.current_stats.flow, np.mean(self.all_speeds), self.current_stats.congestion_level)
+            if self.config.mqtt_enable:
+                # mqtt 
+                self.mqtt_publisher.publish_traffic_data(self.current_stats.flow, np.mean(self.all_speeds), self.current_stats.congestion_level)
 
             self.reset_traffic_stats(current_time)
 
@@ -1511,8 +1522,38 @@ class TrafficMonitor():
             rospy.logwarn('Missing camera data')
             return
         if not self.data.radar:
-            rospy.logwarn('Missing radar data')
-            return
+            # create dummy radar data
+            rospy.logwarn_once('Missing radar data, using dummy radar data')
+            
+            # 建立空的 PointCloud2 訊息
+            header = Header()
+            header.stamp = self.data.camera.header.stamp
+            header.frame_id = "radar"  # 或使用你的雷達 frame_id
+            
+            # 定義 PointCloud2 的欄位結構 (x, y, z, vx, vy)
+            fields = [
+                PointField('x', 0, PointField.FLOAT32, 1),
+                PointField('y', 4, PointField.FLOAT32, 1),
+                PointField('z', 8, PointField.FLOAT32, 1),
+                PointField('vx', 12, PointField.FLOAT32, 1),
+                PointField('vy', 16, PointField.FLOAT32, 1),
+            ]
+            
+            # 建立空的點雲資料 (沒有任何點)
+            dummy_points = []
+            
+            # 或者你可以加入一些測試用的虛擬點:
+            # dummy_points = [
+            #     [10.0, 0.0, 1.0, -5.0, 0.0],   # x, y, z, vx, vy
+            #     [15.0, 2.0, 1.0, -3.0, 1.0],
+            # ]
+            
+            dummy_radar_msg = pc2.create_cloud(header, fields, dummy_points)
+            self.data.radar = dummy_radar_msg
+
+            # real radar data
+            # rospy.logwarn('Missing radar data')
+            # return
         
         # if self.cvInit == False:
         #     cv2.namedWindow("traffic_monitor", cv2.WINDOW_NORMAL)
@@ -1548,7 +1589,6 @@ class TrafficMonitor():
             boxes, ids, class_ids = [], [], []
             radar_frame = frame.copy()
         
-
         
 
         # process radar
@@ -1566,7 +1606,47 @@ class TrafficMonitor():
         self.flow_stats(objects)
 
 
-        
+        # 整合偵測結果至BEV
+        # 發布 boxes
+        boxes_array = []
+        for box, box_id, cls_id in zip(boxes, ids, class_ids):
+            x, y, w, h = box
+            # x, y = int(x - w / 2), int(y - h / 2)
+            boxes_array.append([x, y, w, h])
+            
+
+        if len(boxes_array) > 0:
+            boxes_msg = Float32MultiArray()
+            boxes_msg.data = np.array(boxes_array).flatten().tolist()
+            self.pub_boxes.publish(boxes_msg)
+        else:
+            self.pub_boxes.publish(Float32MultiArray())
+
+        # 發布 track ids
+        if len(ids) > 0:
+            ids_msg = Int32MultiArray()
+            ids_msg.data = [int(i) if i is not None else -1 for i in ids]
+            
+            self.pub_ids.publish(ids_msg)
+        else:
+            self.pub_ids.publish(Int32MultiArray())
+
+        # 發布 class ids
+        if len(class_ids) > 0:
+            class_ids_msg = Int32MultiArray()
+            class_ids_msg.data = [int(c) for c in class_ids]
+            self.pub_class_ids.publish(class_ids_msg)
+        else:
+            self.pub_class_ids.publish(Int32MultiArray())
+
+        # 發布 2D points
+        if len(points_2d) > 0:
+            points_2d_msg = Float32MultiArray()
+            points_2d_msg.data = points_2d.flatten().tolist()
+            self.pub_points_2d.publish(points_2d_msg)
+        else:
+            self.pub_points_2d.publish(Float32MultiArray())
+
 
 
 
@@ -1962,13 +2042,33 @@ class TrafficMonitor():
 
         self.pub_radar_marker.publish(markers)
 
-if __name__ == '__main__':
-    print(torch.cuda.is_available())
+def run_monitor(config_path):
     try:
-        monitor = TrafficMonitor()
+        monitor = TrafficMonitor(config_path)
         rospy.spin()
-    except rospy.ROSInterruptException as e:
-        rospy.logerr(e)
-        rospy.signal_shutdown('Error')
-        cv2.destroyAllWindows()
-        raise
+    except Exception as e:
+        rospy.logerr(f"Monitor error: {e}")
+
+
+def run_bev_integration():
+    """運行 BEV 整合節點"""
+    try:
+        bev_node = BEVIntegrationNode("config1.yaml", "config2.yaml")
+        rospy.spin()
+    except Exception as e:
+        rospy.logerr(f"BEV integration error: {e}")
+
+if __name__ == '__main__':
+    # 每個 process 有獨立的記憶體空間和 ROS node
+    p1 = Process(target=run_monitor, args=("config1.yaml",))
+    p2 = Process(target=run_monitor, args=("config2.yaml",))
+    p_bev = Process(target=run_bev_integration)
+
+    
+    p1.start()
+    p2.start()
+    p_bev.start()
+    
+    p1.join()
+    p2.join()
+    p_bev.join()

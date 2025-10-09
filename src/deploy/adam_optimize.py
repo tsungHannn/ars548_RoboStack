@@ -38,14 +38,28 @@ class CPUCalibrationOptimizer(nn.Module):
         self.calib_vis = True # 校正可視化
         
         # ROS可視化
-        try:
-            self.visualize_pub = rospy.Publisher('/optimize_visualize', Image, queue_size=1)
-            self.sub_optimize_action = rospy.Subscriber('/control/optimize_action', String, self.control_callback)
-            self.bridge = CvBridge()
-            self.ros_enabled = True
-        except:
-            print("ROS未初始化，跳過ROS發布器")
-            self.ros_enabled = False
+        
+        self.visualize_pub = rospy.Publisher('/optimize_visualize', Image, queue_size=1)
+        # self.sub_optimize_action = rospy.Subscriber('/control/optimize_action', String, self.control_callback)
+
+        # 因為讀取config會有點麻煩，所以直接subscribe所有/control開頭的topic
+        self.subscribers = []
+        topics = rospy.get_published_topics()
+        # 篩選符合條件的 topics
+        for topic_name, topic_type in topics:
+            if topic_name.startswith('/control') and topic_name.endswith('/optimize_action'):
+                # 動態建立訂閱者
+                sub = rospy.Subscriber(topic_name, String, self.control_callback)
+                self.subscribers.append(sub)
+                # rospy.loginfo(f"Subscribed to: {topic_name}")
+
+
+
+        self.bridge = CvBridge()
+        self.ros_enabled = True
+    
+        # print("ROS未初始化，跳過ROS發布器")
+        # self.ros_enabled = False
     
     def normalize_quaternion(self, q):
         """標準化四元數"""

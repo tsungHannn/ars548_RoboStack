@@ -11,7 +11,7 @@ from utils import yaml_to_object
 import yaml
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, font
 from tkinter.scrolledtext import ScrolledText
 
 import rospy
@@ -21,12 +21,13 @@ class ROSNode:
     """分離的 ROS 節點類別"""
     def __init__(self):
         rospy.init_node('control_panel_gui', anonymous=True)
-        
+
+        # 這邊的Publisher和Subscriber會在GUI類別中再次定義
         self.matrix_pub = rospy.Publisher('/control/matrix', Float32MultiArray, queue_size=10)
         self.optimize_action_pub = rospy.Publisher('/control/optimize_action', String, queue_size=10)
         self.matrix_sub = rospy.Subscriber('/radar/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
         self.intrinsic_pub = rospy.Publisher('/control/camera_intrinsic', Float32MultiArray, queue_size=10)
-
+        
         # 回調函數將通過主視窗設置
         self.gui_callback = None
         
@@ -40,10 +41,12 @@ class ROSNode:
             self.gui_callback(msg)
 
 class ProjectorGUI:
-    def __init__(self, ros_node: ROSNode, config_path='config.yaml'):
+    def __init__(self, ros_node: ROSNode, config_path='config1.yaml'):
+
+
         self.ros_node = ros_node
         self.ros_node.set_gui_callback(self.update_matrix_from_auto_calib)
-        
+       
         # Camera parameters
         self.config_path = config_path
         self.camera_matrix = None
@@ -60,12 +63,40 @@ class ProjectorGUI:
         self.load_config()
         self.init_calibration()
         
+
+        self.matrix_pub = rospy.Publisher(self.config.control_prefix+'_matrix', Float32MultiArray, queue_size=10)
+        self.optimize_action_pub = rospy.Publisher(self.config.control_prefix+'/optimize_action', String, queue_size=10)
+        self.matrix_sub = rospy.Subscriber(self.config.radar_prefix+'/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
+        self.intrinsic_pub = rospy.Publisher(self.config.control_prefix+'/camera_intrinsic', Float32MultiArray, queue_size=10)
+
+
         # Create main window
         self.root = tk.Tk()
         self.root.title("Camera Projector Control Panel")
         self.root.geometry("400x900")
+        self.root.option_add('*Font', '{Microsoft JhengHei UI} 10')
+
+        self.default_font = font.Font(family="Microsoft JhengHei UI", size=10)  # 微軟正黑體
+        self.title_font = font.Font(family="Microsoft JhengHei UI", size=11, weight="bold")
+        self.button_font = font.Font(family="Microsoft JhengHei UI", size=10)
+        self.matrix_font = font.Font(family="Consolas", size=9)  # 等寬字體用於矩陣顯示
         
+        # 設定 ttk 樣式
+        style = ttk.Style()
+        
+        # 設定各種元件的字體
+        style.configure('TLabel', font=self.default_font)
+        style.configure('TButton', font=self.button_font)
+        style.configure('TCheckbutton', font=self.default_font)
+        style.configure('TCombobox', font=self.default_font)
+        style.configure('TLabelframe.Label', font=self.title_font)  # 框架標題
+
+        
+        
+
+
         # Variables for controls
+        self.config_var = tk.StringVar(value=self.config_path)
         self.degree_var = tk.DoubleVar(value=self.cali_scale_degree)
         self.trans_var = tk.DoubleVar(value=self.cali_scale_trans)
         self.intrinsic_var = tk.DoubleVar(value=self.cali_scale_intrinsic)
@@ -144,6 +175,17 @@ class ProjectorGUI:
         transform_frame = ttk.LabelFrame(scrollable_frame, text="Transformation Controls", padding=10)
         transform_frame.pack(fill=tk.X, padx=10, pady=5)
         
+        # 選擇config檔案
+        config_frame = ttk.Frame(transform_frame)
+        config_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(config_frame, text="Config file：").pack(side=tk.LEFT, padx=5)
+        config_combo = ttk.Combobox(config_frame, textvariable=self.config_var,
+                                    values=["config1.yaml", "config2.yaml"], width=15)
+        config_combo.pack(side=tk.LEFT, padx=5)
+        config_combo.bind('<<ComboboxSelected>>', self.on_config_changed)
+
+
         # 顯示雷達軌跡
         checkbox_frame = ttk.Frame(transform_frame)
         checkbox_frame.pack(fill=tk.X, pady=5)
@@ -301,6 +343,13 @@ class ProjectorGUI:
             self.camera_matrix = np.array(self.config.camera.camera_matrix.copy())
             self.extrinsic_matrix = np.array(self.config.camera.extrinsic_matrix.copy())
             self.original_extrinsic = self.extrinsic_matrix.copy()
+
+            self.matrix_pub = rospy.Publisher(self.config.control_prefix+'_matrix', Float32MultiArray, queue_size=10)
+            self.optimize_action_pub = rospy.Publisher(self.config.control_prefix+'/optimize_action', String, queue_size=10)
+            self.matrix_sub = rospy.Subscriber(self.config.radar_prefix+'/extrinsic_matrix', Float32MultiArray, self.update_matrix_from_auto_calib)
+            self.intrinsic_pub = rospy.Publisher(self.config.control_prefix+'/camera_intrinsic', Float32MultiArray, queue_size=10)
+
+
             
             # Validate matrices dimensions
             if self.camera_matrix.shape != (3, 3):
@@ -423,7 +472,7 @@ class ProjectorGUI:
         """發布相機內參矩陣到 ROS"""
         matrix_msg = Float32MultiArray()
         matrix_msg.data = self.camera_matrix.flatten().tolist()
-        self.ros_node.intrinsic_pub.publish(matrix_msg)
+        self.intrinsic_pub.publish(matrix_msg)
         print("已發布相機內參矩陣到 ROS")
 
 
@@ -459,7 +508,8 @@ class ProjectorGUI:
         # Publish matrix to ROS
         matrix_msg = Float32MultiArray()
         matrix_msg.data = self.extrinsic_matrix.flatten().tolist()
-        self.ros_node.matrix_pub.publish(matrix_msg)
+        print("pub matrix")
+        self.matrix_pub.publish(matrix_msg)
     
     def update_matrix_from_auto_calib(self, msg):
         """Update extrinsic matrix from auto calibration message"""
@@ -467,6 +517,50 @@ class ProjectorGUI:
         self.root.after(0, self.update_matrix_display)  # Thread-safe GUI update
         print("Received new extrinsic matrix from auto calibration")
     
+    def on_config_changed(self, event):
+        """當 config 選單改變時自動執行"""
+        new_config = self.config_var.get()
+        old_config = self.config_path
+        
+        # 如果選擇的是同一個檔案，不需要確認
+        if new_config == old_config:
+            return
+        
+        print(f"偵測到 config 改變: {old_config} -> {new_config}")
+        
+        # 彈出確認視窗
+        result = messagebox.askyesno(
+            "確認切換設定",
+            f"目前設定: {old_config}\n"
+            f"新設定: {new_config}\n\n"
+            f"切換後將會重新載入所有參數，目前未儲存的校正將會遺失。\n\n"
+            f"確定要切換嗎?",
+            icon='warning'
+        )
+        
+        if result:
+            # 使用者確認切換
+            print(f"使用者確認切換到: {new_config}")
+            
+            # 更新 config 路徑
+            self.config_path = new_config
+            
+            # 重新載入設定
+            self.load_config()
+            self.init_calibration()
+            self.reset_calibration()
+
+
+            
+            # 你可以在這裡加入其他需要執行的動作
+            # 例如:發送訊息到 ROS
+            # self.send_action("config_changed")
+        else:
+            # 使用者取消,恢復到原本的選擇
+            print(f"使用者取消切換，保持使用: {old_config}")
+            self.config_var.set(old_config)
+
+
     def send_action(self, action):
         """Send optimization action via ROS"""
         method = self.method_var.get()
@@ -482,7 +576,7 @@ class ProjectorGUI:
         payload = json.dumps([action, method, sample_interval, optimize_filter, 
                             vx_filter, vy_filter, camera_filter_x, camera_filter_y, radar_trajectory, calib_vis])
         msg = String(data=payload)
-        self.ros_node.optimize_action_pub.publish(msg)
+        self.optimize_action_pub.publish(msg)
         print(f"已送出動作: {action}, 方法: {method}, 取樣間隔: {sample_interval}, 雷達軌跡: {radar_trajectory}, 校正過程: {calib_vis}")
     
     def save_calibration(self):

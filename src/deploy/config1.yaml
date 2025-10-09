@@ -1,10 +1,13 @@
 camera_topic: /aravis_cam1/image_color
 radar_topic: /radar1/point_cloud_object
-echo_topic: /traffic_echo1
+radar_prefix: /radar1
 track_topic: /traffic_track1
-radar_project_topic: /traffic_radar_project1
-optimize_target_topic: /traffic_optimize_target1
+detection_prefix: /detection1
+control_prefix: /control1
 final_topic: /traffic_final1
+mqtt_enable: false
+bev_enable: true
+bev_image_path: BEV_test/CSIST_layout.png
 fps: 20
 stats_interval_seconds: 15
 radar_track_enabled: false
@@ -27,17 +30,17 @@ model:
   - 8
 camera:
   extrinsic_matrix:
-  - - 0.008192027918994427
-    - -0.9981263279914856
-    - 0.060636330395936966
+  - - 0.010290504098690558
+    - -0.9979310451471493
+    - 0.06346475535280045
     - 0.09321359544992447
-  - - -0.053390875458717346
-    - -0.06098845973610878
-    - -0.9967095255851747
+  - - -0.14024863528168882
+    - -0.06428114627247081
+    - -0.9880274848054466
     - 5.23658561706543
-  - - 0.9985401034355165
-    - 0.0049276454374194145
-    - -0.05379045754671097
+  - - 0.9900628560908169
+    - 0.0012664556073768813
+    - -0.1406199497267115
     - -0.8668146729469299
   - - 0.0
     - 0.0

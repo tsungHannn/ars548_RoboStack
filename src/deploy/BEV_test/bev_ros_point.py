@@ -1,477 +1,312 @@
-"""
-ROS1 BEV視角投影與物件偵測節點
-結合多視角影像播放、物件偵測與BEV投影功能
-"""
-
 import rospy
-import cv2
-import json
-import numpy as np
-import os
-import glob
-from threading import Thread, Lock
-from ultralytics import YOLO
-from natsort import natsorted
-from tqdm import tqdm
-
-# ROS相關函式庫
 from sensor_msgs.msg import Image
+from std_msgs.msg import Float32MultiArray, Int32MultiArray
 from cv_bridge import CvBridge
-from std_msgs.msg import Header
+import cv2
+import numpy as np
+import json
+import message_filters
 
-# YOLO物件偵測 (可根據需要調整為其他偵測器)
-try:
-    import torch
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
-    rospy.logwarn("PyTorch未安裝，將使用模擬偵測結果")
+from utils import json_to_object, yaml_to_object
 
-class BEVProjectionNode:
-    def __init__(self):
-        rospy.init_node('bev_projection_node', anonymous=True)
+
+
+class_names = { 0: 'object',
+                1: 'bus',
+                2: 'car',
+                3: 'motorcycle',
+                4: 'truck'}
+
+
+
+
+class BEVIntegrationNode:
+    """整合多個 RSU 的偵測結果到 BEV 視角"""
+    
+    def __init__(self, config1_path, config2_path):
+        rospy.init_node('bev_integration_node', anonymous=True)
         
-        # 初始化CV橋接器
+        self.config1 = yaml_to_object(config1_path)
+        self.config2 = yaml_to_object(config2_path)
+        self.scale_factor = 0.5 # 分項一本來有先做resize 0.5，所以這邊也要0.5，不然偵測結果會炸掉
+
         self.bridge = CvBridge()
         
         # 載入參數
-        self.load_parameters()
-        self.save_to_video = True  # 設定為True以儲存影片，False則發布影像
+        self.bev_image_path = self.config1.bev_image_path
+        self.json_config_path = self.config1.bev_image_path.replace("png", "json")
         
-        # 初始化發布器
-        self.left_pub = rospy.Publisher('/camera/left/image', Image, queue_size=1)
-        self.right_pub = rospy.Publisher('/camera/right/image', Image, queue_size=1)
-        self.bev_pub = rospy.Publisher('/camera/bev/image', Image, queue_size=1)
+        # 載入 BEV 影像和轉換矩陣
+        self.bev_image = cv2.imread(self.bev_image_path)
+        with open(self.json_config_path, 'r') as f:
+            json_data = json.load(f)
+            self.homographys = np.array(json_data["homographys"])
+            self.affines = np.array(json_data["affines"])
         
-        # 載入配置檔案和影像
-        self.load_config_and_images()
-        
-        # 初始化物件偵測器
-        self.init_object_detector()
-        
-        if self.save_to_video:
-            self.init_video_writer()
 
-        # 控制變數
-        self.frame_index = 1
-        self.is_running = True
-        self.image_lock = Lock()
+
+        # # 計算BEV重疊區域
+        # self.overlap_mask = self.compute_overlap_region()
+
+        # self.overlay = np.zeros_like(self.bev_image)
+        # # 重疊區域顯示為黃色
+        # self.overlay[self.overlap_mask > 0] = [0, 255, 255]
+
+
+
+        # 儲存每個 RSU 的最新偵測結果
+        self.rsu1_detections = []
+        self.rsu2_detections = []
         
-        # 啟動影像處理執行緒
-        self.processing_thread = Thread(target=self.process_images)
-        self.processing_thread.daemon = True
-        self.processing_thread.start()
+        # 訂閱兩個 RSU 的偵測結果 (從 TrafficMonitor 發布)
+        # rospy.Subscriber(self.config1.detection_result_topic, Float32MultiArray, self.rsu1_callback)
+        self.sub_boxes1 = message_filters.Subscriber(self.config1.detection_prefix + '/boxes', Float32MultiArray, queue_size=1)
+        self.sub_ids1 = message_filters.Subscriber(self.config1.detection_prefix + '/track_ids', Int32MultiArray, queue_size=1)
+        self.sub_class_ids1 = message_filters.Subscriber(self.config1.detection_prefix + '/class_ids', Int32MultiArray, queue_size=1)
+        self.sub_points_2d1 = message_filters.Subscriber(self.config1.detection_prefix + '/points_2d', Float32MultiArray, queue_size=1)
+        self.sync1 = message_filters.ApproximateTimeSynchronizer([self.sub_boxes1, self.sub_ids1, self.sub_class_ids1, self.sub_points_2d1] , queue_size=1, slop=0.1, allow_headerless=True)
+        self.sync1.registerCallback(self.rsu1_callback)
+
+
+        self.sub_boxes2 = message_filters.Subscriber(self.config2.detection_prefix + '/boxes', Float32MultiArray, queue_size=1)
+        self.sub_ids2 = message_filters.Subscriber(self.config2.detection_prefix + '/track_ids', Int32MultiArray, queue_size=1)
+        self.sub_class_ids2 = message_filters.Subscriber(self.config2.detection_prefix + '/class_ids', Int32MultiArray, queue_size=1)
+        self.sub_points_2d2 = message_filters.Subscriber(self.config2.detection_prefix + '/points_2d', Float32MultiArray, queue_size=1)
+        self.sync2 = message_filters.ApproximateTimeSynchronizer([self.sub_boxes2, self.sub_ids2, self.sub_class_ids2, self.sub_points_2d2] , queue_size=1, slop=0.1, allow_headerless=True)
+        self.sync2.registerCallback(self.rsu2_callback)
+
+
+        # rospy.Subscriber(self.config1.detection_result_topic, Float32MultiArray, self.rsu2_callback)
         
-        rospy.loginfo("BEV投影節點已啟動")
+        # 發布 BEV 結果
+        self.bev_pub = rospy.Publisher('/bev_combined', Image, queue_size=1)
+        
+        # 定時更新 BEV
+        rospy.Timer(rospy.Duration(1.0/20.0), self.update_bev)
+        
+        rospy.loginfo("BEV整合節點已啟動")
     
-    def load_parameters(self):
-        """載入ROS參數"""
-        self.bev_image_path = rospy.get_param('~bev_image_path', '/home/mvclab/workspace/ncsist/ars548_RoboStack/src/deploy/BEV_test/CSIST_layout.png')
-        self.left_folder_path = rospy.get_param('~left_folder_path', '/media/mvclab/HDD/ncsist/2025/data/CSIST/left')
-        self.right_folder_path = rospy.get_param('~right_folder_path', '/media/mvclab/HDD/ncsist/2025/data/CSIST/right')
-        self.json_config_path = rospy.get_param('~json_config_path', '/home/mvclab/workspace/ncsist/ars548_RoboStack/src/deploy/BEV_test/CSIST_layout.json')
-        self.fps = rospy.get_param('~fps', 20.0)
-        self.detection_confidence = rospy.get_param('~detection_confidence', 0.5)
-
-        self.output_video_path = '/home/mvclab/workspace/ncsist/ars548_RoboStack/src/deploy/BEV_video.mp4'
-
+    def rsu1_callback(self, msg_boxes, msg_ids, msg_class_ids, msg_points_2d):
+        """接收 RSU1 的偵測結果"""
+        # 這裡假設偵測結果已經包含在影像中
+        # 實際應用中可能需要自定義訊息格式來傳遞偵測座標
         
-        rospy.loginfo(f"BEV影像路徑: {self.bev_image_path}")
-        rospy.loginfo(f"左視角資料夾: {self.left_folder_path}")
-        rospy.loginfo(f"右視角資料夾: {self.right_folder_path}")
-        rospy.loginfo(f"配置檔案: {self.json_config_path}")
-    
-    def load_config_and_images(self):
-        """載入配置檔案和影像"""
-        try:
-            # 載入BEV影像
-            self.bev_image = cv2.imread(self.bev_image_path)
-            if self.bev_image is None:
-                raise ValueError(f"無法載入BEV影像: {self.bev_image_path}")
-            
-            # 載入JSON配置檔案
-            with open(self.json_config_path, 'r') as file:
-                json_data = json.load(file)
-                self.homographys = np.array(json_data["homographys"])
-                self.affines = np.array(json_data["affines"])
-            
-            # 載入左右視角影像檔案列表
-            self.left_images = natsorted(glob.glob(os.path.join(self.left_folder_path, "*.jpg")) + 
-                                    glob.glob(os.path.join(self.left_folder_path, "*.png")))
-            self.right_images = natsorted(glob.glob(os.path.join(self.right_folder_path, "*.jpg")) + 
-                                     glob.glob(os.path.join(self.right_folder_path, "*.png")))
-            
-            if len(self.left_images) == 0 or len(self.right_images) == 0:
-                raise ValueError("左視角或右視角資料夾中沒有找到影像檔案")
-            
-            rospy.loginfo(f"載入了 {len(self.left_images)} 張左視角影像")
-            rospy.loginfo(f"載入了 {len(self.right_images)} 張右視角影像")
-            
-        except Exception as e:
-            rospy.logerr(f"載入配置失敗: {str(e)}")
-            rospy.signal_shutdown("配置載入失敗")
-    
-    def init_object_detector(self):
-        """初始化物件偵測器"""
-        if YOLO_AVAILABLE:
-            try:
-                # 這裡可以載入預訓練的YOLO模型
-                # self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
-                # self.model.eval()
-                self.model = YOLO("/home/mvclab/workspace/ncsist/ars548_RoboStack/src/deploy/yolo11x.pt")
-                if torch.cuda.is_available():
-                    self.model.to(torch.device('cuda'))
-                rospy.loginfo("物件偵測器初始化完成 (使用YOLO)")
-                self.use_yolo = True
-            except Exception as e:
-                rospy.logwarn(f"YOLO載入失敗: {str(e)}，將使用模擬偵測")
-                self.use_yolo = False
-        else:
-            self.use_yolo = False
-            rospy.loginfo("使用模擬物件偵測")
+        boxes = np.array(msg_boxes.data).reshape(-1, 4).tolist() if len(msg_boxes.data) > 0 else []
+        ids = np.array(msg_ids.data).tolist() if len(msg_ids.data) > 0 else []
+        class_ids = np.array(msg_class_ids.data).tolist() if len(msg_class_ids.data) > 0 else []
+        points_2d = np.array(msg_points_2d.data).reshape(-1, 2).tolist() if len(msg_points_2d.data) > 0 else []
 
-    def init_video_writer(self):
-        """初始化影片寫入器 - 三個影像統一尺寸橫著排列"""
-        # 先載入一張影像來取得尺寸
-        temp_bev = cv2.imread(self.bev_image_path)
-        temp_left_files = glob.glob(os.path.join(self.left_folder_path, "*.jpg")) + glob.glob(os.path.join(self.left_folder_path, "*.png"))
-        if temp_left_files:
-            temp_left = cv2.imread(temp_left_files[0])
-            temp_left = cv2.resize(temp_left, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
-
-            temp_right_files = glob.glob(os.path.join(self.right_folder_path, "*.jpg")) + glob.glob(os.path.join(self.right_folder_path, "*.png"))
-            if temp_right_files:
-                temp_right = cv2.imread(temp_right_files[0])
-                temp_right = cv2.resize(temp_right, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
-
-                
-                # 儲存各影像的原始尺寸
-                self.left_height, self.left_width = temp_left.shape[:2]
-                self.right_height, self.right_width = temp_right.shape[:2]
-                self.bev_height, self.bev_width = temp_bev.shape[:2]
-                
-                # 計算統一的目標尺寸 (取最大的寬度和高度)
-                self.target_width = min(self.left_width, self.right_width, self.bev_width)
-                self.target_height = min(self.left_height, self.right_height, self.bev_height)
-                
-                # 計算合成影像的尺寸 (三個相同尺寸的影像橫著排列)
-                self.combined_width = self.target_width * 3
-                self.combined_height = self.target_height
-                
-                # 初始化影片寫入器
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                self.video_writer = cv2.VideoWriter(
-                    self.output_video_path, 
-                    fourcc, 
-                    self.fps, 
-                    (self.combined_width, self.combined_height)
-                )
-                
-                rospy.loginfo(f"影片輸出尺寸 (三等分排列): {self.combined_width}x{self.combined_height}")
-                rospy.loginfo(f"每個影像統一尺寸: {self.target_width}x{self.target_height}")
-                rospy.loginfo(f"原始尺寸 - Left: {self.left_width}x{self.left_height}, Right: {self.right_width}x{self.right_height}, BEV: {self.bev_width}x{self.bev_height}")
+        self.rsu1_detections = [boxes, ids, class_ids, points_2d]
     
-    def detect_objects(self, image):
-        """物件偵測函數"""
-        if self.use_yolo and YOLO_AVAILABLE:
-            try:
-                results = self.model(image, 
-                            conf=self.detection_confidence, 
-                            device='cuda' if torch.cuda.is_available() else 'cpu',
-                            verbose=False,
-                            show=False,
-                            save=False,
-                            classes=[1,2,3,4,5,6,7,8])
-            
-                detections = []
+    def rsu2_callback(self, msg_boxes, msg_ids, msg_class_ids, msg_points_2d):
+        """接收 RSU2 的偵測結果"""
+        boxes = np.array(msg_boxes.data).reshape(-1, 4).tolist() if len(msg_boxes.data) > 0 else []
+        ids = np.array(msg_ids.data).tolist() if len(msg_ids.data) > 0 else []
+        class_ids = np.array(msg_class_ids.data).tolist() if len(msg_class_ids.data) > 0 else []
+        points_2d = np.array(msg_points_2d.data).reshape(-1, 2).tolist() if len(msg_points_2d.data) > 0 else []
+        # points_3d = np.array(msg_points_3d.data).reshape(-1, 3).tolist() if len(msg_points_3d.data) > 0 else []
+
+        self.rsu2_detections = [boxes, ids, class_ids, points_2d]
+    
+    def compute_overlap_region(self):
+        """通過密集採樣來計算兩個RSU在BEV空間的重疊區域"""
+        h, w = self.bev_image.shape[:2]
+        
+        # 為每個RSU創建可視區域mask
+        mask1 = np.zeros((h, w), dtype=np.uint8)
+        mask2 = np.zeros((h, w), dtype=np.uint8)
+        
+        # 原始影像尺寸(縮放後): 1024(高) x 1224(寬)
+        img_h, img_w = int(2048 * self.scale_factor), int(2448 * self.scale_factor)
+        
+        rospy.loginfo("開始計算RSU可視區域...")
+        
+        # 使用密集網格採樣來填充可視區域
+        step = 10  # 每10個像素採樣一次,可以根據需要調整
+        
+        # RSU1的可視區域採樣
+        valid_points1 = []
+        for y in range(0, img_h, step):
+            for x in range(0, img_w, step):
+                pt = np.array([x, y, 1.0])
+                pt_h = self.homographys[0] @ pt
                 
-                # 檢查是否有偵測結果
-                if len(results) == 0 or len(results[0].boxes) == 0:
-                    return detections
-                
-                # 取得第一個結果（通常只有一個）
-                result = results[0]
-                boxes = result.boxes.xywh.cpu()  # 中心點座標格式 (x_center, y_center, width, height)
-                confidences = result.boxes.conf.cpu()  # 信心度
-                class_ids = result.boxes.cls.cpu().int() if result.boxes.cls is not None else None
-                
-                # 處理每個偵測結果
-                for i, box in enumerate(boxes):
-                    x_center, y_center, width, height = box
-                    confidence = confidences[i]
-                    cls_id = class_ids[i].item() if class_ids is not None else -1
+                if abs(pt_h[2]) > 1e-6:
+                    pt_h = pt_h / pt_h[2]
+                    pt_bev = self.affines[0] @ pt_h
+                    bev_x, bev_y = int(pt_bev[0]), int(pt_bev[1])
                     
-                    # 轉換為左上角和右下角座標
-                    x1 = int(x_center - width / 2)
-                    y1 = int(y_center - height / 2)
-                    x2 = int(x_center + width / 2)
-                    y2 = int(y_center + height / 2)
+                    # 只保留在BEV範圍內的點
+                    if 0 <= bev_x < w and 0 <= bev_y < h:
+                        valid_points1.append([bev_x, bev_y])
+        
+        # 填充RSU1的可視區域
+        if len(valid_points1) > 0:
+            valid_points1 = np.array(valid_points1, dtype=np.int32)
+            for pt in valid_points1:
+                cv2.circle(mask1, tuple(pt), step//2 + 2, 255, -1)
+        
+        rospy.loginfo(f"RSU1: 找到 {len(valid_points1)} 個有效採樣點")
+        
+        # RSU2的可視區域採樣
+        valid_points2 = []
+        for y in range(0, img_h, step):
+            for x in range(0, img_w, step):
+                pt = np.array([x, y, 1.0])
+                pt_h = self.homographys[1] @ pt
+                
+                if abs(pt_h[2]) > 1e-6:
+                    pt_h = pt_h / pt_h[2]
+                    pt_bev = self.affines[1] @ pt_h
+                    bev_x, bev_y = int(pt_bev[0]), int(pt_bev[1])
                     
-                    # 可以根據需要過濾特定類別
-                    # 例如：只保留特定類別的物件
-                    # valid_classes = [0, 1, 2, 3, 4, 5, 6, 7]  # COCO類別ID
-                    # if cls_id not in valid_classes:
-                    #     continue
-                    
-                    # 將中心點座標加入偵測結果
-                    detections.append([int(x_center), int(y_center)])
-                    
-                    # 如果需要更多資訊，可以改為字典格式
-                    # detections.append({
-                    #     'center': [int(x_center), int(y_center)],
-                    #     'bbox': [x1, y1, x2, y2],
-                    #     'confidence': float(confidence),
-                    #     'class_id': cls_id,
-                    #     'class_name': self.model.names[cls_id] if cls_id >= 0 else 'unknown'
-                    # })
-                    # ===========================
-
-
-
-
-
-                
-                return detections
-            except Exception as e:
-                rospy.logwarn(f"YOLO偵測失敗: {str(e)}")
-                return self.simulate_detection(image)
-        else:
-            return self.simulate_detection(image)
+                    # 只保留在BEV範圍內的點
+                    if 0 <= bev_x < w and 0 <= bev_y < h:
+                        valid_points2.append([bev_x, bev_y])
+        
+        # 填充RSU2的可視區域
+        if len(valid_points2) > 0:
+            valid_points2 = np.array(valid_points2, dtype=np.int32)
+            for pt in valid_points2:
+                cv2.circle(mask2, tuple(pt), step//2 + 2, 255, -1)
+        
+        rospy.loginfo(f"RSU2: 找到 {len(valid_points2)} 個有效採樣點")
+        
+        # 計算重疊區域
+        overlap_mask = cv2.bitwise_and(mask1, mask2)
+        
+        # 輸出統計資訊
+        rospy.loginfo(f"原始影像尺寸(縮放後): {img_h}x{img_w}")
+        rospy.loginfo(f"BEV影像尺寸: {h}x{w}")
+        rospy.loginfo(f"RSU1可視區域像素數: {np.sum(mask1 > 0)}")
+        rospy.loginfo(f"RSU2可視區域像素數: {np.sum(mask2 > 0)}")
+        rospy.loginfo(f"重疊區域像素數: {np.sum(overlap_mask > 0)}")
+        
+        # # 儲存除錯圖片
+        # cv2.imwrite('/tmp/rsu1_mask.png', mask1)
+        # cv2.imwrite('/tmp/rsu2_mask.png', mask2)
+        # cv2.imwrite('/tmp/overlap_mask.png', overlap_mask)
+        
+        # # 視覺化在BEV上
+        # debug_img = self.bev_image.copy()
+        # debug_img[mask1 > 0] = [0, 255, 0]  # RSU1區域顯示為綠色
+        # debug_img[mask2 > 0] = [255, 0, 0]  # RSU2區域顯示為藍色
+        # debug_img[overlap_mask > 0] = [0, 255, 255]  # 重疊區域顯示為黃色
+        # cv2.imwrite('/tmp/bev_regions_debug.png', debug_img)
+        
+        # rospy.loginfo("重疊區域計算完成,除錯圖片已儲存到 /tmp/")
+        
+        return overlap_mask
     
-    def simulate_detection(self, image):
-        """模擬物件偵測 (用於測試)"""
-        h, w = image.shape[:2]
-        # 模擬一些隨機的車輛偵測結果
-        detections = []
-        for i in range(np.random.randint(1, 4)):  # 1-3個偵測結果
-            x = np.random.randint(w//4, 3*w//4)
-            y = np.random.randint(h//2, h)
-            conf = np.random.uniform(0.6, 0.95)
-            detections.append([x, y, conf])
-        
-        return detections
-    
-    def transform_rsv2bev(self, pt, homography, affine):
-        """將RSV座標轉換為BEV座標"""
-        # 轉換為齊次座標
-        pt = np.array([pt[0], pt[1], 1.0])
-        
-        # 應用單應性變換
-        pt = homography @ pt
-        
-        # 正規化獲得像素座標
-        pt[0] = pt[0] / pt[2]
-        pt[1] = pt[1] / pt[2]
-        pt[2] = 1.0
-        
-        # 應用仿射變換
-        pt = affine @ pt
-        x = int(pt[0])
-        y = int(pt[1])
-        
-        return [x, y]
-    
-    def draw_detections(self, image, detections, color=(0, 255, 0)):
-        """在影像上繪製偵測結果"""
-        result_image = image.copy()
-        
-        if len(detections) == 0:
-            return result_image
-        for i, (x, y) in enumerate(detections):
-            # 繪製偵測點
-            cv2.circle(result_image, (x, y), 10, color, -1)
-            
-            # # 顯示信心度
-            # text = f"Car {conf:.2f}"
-            # cv2.putText(result_image, text, (x + 10, y - 10), 
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        
-        return result_image
+    def is_in_overlap_region(self, bev_point):
+        """判斷BEV座標點是否在重疊區域內"""
+        x, y = bev_point
+        if 0 <= x < self.overlap_mask.shape[1] and 0 <= y < self.overlap_mask.shape[0]:
+            return self.overlap_mask[y, x] > 0
+        return False
     
 
-
-    def combine_images_for_video(self, left_img, right_img, bev_img):
-        """將三個影像合成為一個影像用於影片輸出 - 統一尺寸橫著排列"""
-        # 建立空白畫布
-        combined = np.zeros((self.combined_height, self.combined_width, 3), dtype=np.uint8)
+    def transform_to_bev(self, detections, homography_idx):
+        """將偵測結果轉換到 BEV 座標"""
+        bev_points = []
+        for det in detections:
+            # det 格式: [x, y] 在原始影像中的座標
+            pt = np.array([det[0], det[1], 1.0])
+            
+            # 應用單應性變換
+            pt_h = self.homographys[homography_idx] @ pt
+            pt_h[0] = pt_h[0] / pt_h[2]
+            pt_h[1] = pt_h[1] / pt_h[2]
+            pt_h[2] = 1.0
+            
+            # 應用仿射變換
+            pt_bev = self.affines[homography_idx] @ pt_h
+            bev_points.append([int(pt_bev[0]), int(pt_bev[1])])
         
-        # 將所有影像調整到統一尺寸
-        left_resized = cv2.resize(left_img, (self.target_width, self.target_height))
-        right_resized = cv2.resize(right_img, (self.target_width, self.target_height))
-        bev_resized = cv2.resize(bev_img, (self.target_width, self.target_height))
-        
-        # 平均分配畫面：左影像 | 右影像 | BEV影像
-        # 左影像 (第一個區塊)
-        combined[0:self.target_height, 0:self.target_width] = left_resized
-        
-        # 右影像 (第二個區塊)
-        combined[0:self.target_height, self.target_width:self.target_width*2] = right_resized
-        
-        # BEV影像 (第三個區塊)
-        combined[0:self.target_height, self.target_width*2:self.target_width*3] = bev_resized
-        
-        return combined
+        return bev_points
     
-    def save_frame_to_video(self, left_img, right_img, bev_img):
-        """將影像幀儲存到影片"""
-        if hasattr(self, 'video_writer') and self.video_writer is not None:
-            combined_frame = self.combine_images_for_video(left_img, right_img, bev_img)
-            self.video_writer.write(combined_frame)
+    def update_bev(self, event):
+        """更新 BEV 視圖"""
+        bev_result = self.bev_image.copy()
 
+        # # 先疊加重疊區域的半透明黃色區域
+        # alpha = 0.25  # 透明度
+        # bev_result = cv2.addWeighted(bev_result, 1, self.overlay, alpha, 0)
+        
 
+        
+        # 投影 RSU1 的偵測結果
+        
+        
+        boxes1 = self.rsu1_detections[0] if len(self.rsu1_detections) > 1 else []
+        boxes2 = self.rsu2_detections[0] if len(self.rsu2_detections) > 1 else []
 
-    def process_images(self):
-        """主要影像處理迴圈"""
-        # rate = rospy.Rate(self.fps)
-        total_frames = min(len(self.left_images), len(self.right_images))
-        if self.save_to_video:
-            pbar = tqdm(total=total_frames, desc="Processing Images", unit="frame")
-            processed_frames = 0
-
-        while not rospy.is_shutdown() and self.is_running:
-            # try:
-            time_begin = rospy.Time.now()
-
-            # 計算當前影像索引
-            left_idx = self.frame_index % len(self.left_images)
-            right_idx = self.frame_index % len(self.right_images)
+        detections1 = []
+        detections2 = []
+        for i, box in enumerate(boxes1):
+            x_center, y_center, width, height = box        
+            # 還原到原始影像座標
+            x_center_orig = x_center * self.scale_factor
+            y_center_orig = y_center * self.scale_factor            
+            # # 轉換為左上角和右下角座標
+            # x1 = int(x_center - width / 2)
+            # y1 = int(y_center - height / 2)
+            # x2 = int(x_center + width / 2)
+            # y2 = int(y_center + height / 2)
             
-            # 載入當前影像
-            left_img = cv2.imread(self.left_images[left_idx])
-            left_img = cv2.resize(left_img, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
-            right_img = cv2.imread(self.right_images[right_idx])
-            right_img = cv2.resize(right_img, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
+            # 將中心點座標加入偵測結果
+            detections1.append([int(x_center_orig), int(y_center_orig)])
+        
+        for i, box in enumerate(boxes2):
+            x_center, y_center, width, height = box            
+            # 還原到原始影像座標
+            x_center_orig = x_center * self.scale_factor
+            y_center_orig = y_center * self.scale_factor            
+            # # 轉換為左上角和右下角座標
+            # x1 = int(x_center - width / 2)
+            # y1 = int(y_center - height / 2)
+            # x2 = int(x_center + width / 2)
+            # y2 = int(y_center + height / 2)
+            
+            # 將中心點座標加入偵測結果
+            detections2.append([int(x_center_orig), int(y_center_orig)])
+
+        if len(self.rsu1_detections) > 0:
+            bev_pts_1 = self.transform_to_bev(detections1, homography_idx=0)
+            for pt, id in zip(bev_pts_1, self.rsu1_detections[2]):
+                if 0 <= pt[0] < bev_result.shape[1] and 0 <= pt[1] < bev_result.shape[0]:
+
+                    cv2.circle(bev_result, tuple(pt), 10, (0, 255, 0), -1)  # 綠色表示 RSU1
+                    # 車輛資訊
+                    class_name = class_names.get(id, 'unknown')
+                    cv2.putText(bev_result, f"Class:{class_name}", (pt[0]+10, pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(bev_result, f"Vol: 30 km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # 處理RSU2的偵測結果 (只顯示非重疊區域的車輛)
+        if len(self.rsu2_detections) > 0:
+            bev_pts_2 = self.transform_to_bev(detections2, homography_idx=1)
+            for pt, id in zip(bev_pts_2, self.rsu2_detections[2]):
+                if 0 <= pt[0] < bev_result.shape[1] and 0 <= pt[1] < bev_result.shape[0]:
+                    # # 檢查是否在重疊區域內
+                    # if not self.is_in_overlap_region(pt):
+                    #     # 不在重疊區域,顯示RSU2的偵測結果
+                    #     cv2.circle(bev_result, tuple(pt), 10, (255, 0, 0), -1)  # 藍色表示 RSU2
+                    #     # 車輛資訊
+                    #     class_name = class_names.get(id, 'unknown')
+                    #     cv2.putText(bev_result, f"Class:{class_name}", (pt[0]+10, pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    #     cv2.putText(bev_result, f"Vol: 30 km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    # # 在重疊區域內則跳過,不顯示RSU2的結果
 
 
-            
-            if left_img is None or right_img is None:
-                rospy.logwarn(f"無法載入影像，跳過frame {self.frame_index}")
-                self.frame_index += 1
-                continue
-            
-            # 進行物件偵測
-            # 計算時間
-            left_detections = self.detect_objects(left_img)
-            right_detections = self.detect_objects(right_img)
+                    cv2.circle(bev_result, tuple(pt), 10, (255, 0, 0), -1)  # 藍色表示 RSU2
+                    # 車輛資訊
+                    class_name = class_names.get(id, 'unknown')
+                    cv2.putText(bev_result, f"Class:{class_name}", (pt[0]+10, pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    cv2.putText(bev_result, f"Vol: 30 km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
 
-            # 在原始影像上繪製偵測結果
-            left_with_detection = self.draw_detections(left_img, left_detections, (0, 255, 0))
-            right_with_detection = self.draw_detections(right_img, right_detections, (255, 0, 0))
-            
-            # 建立BEV影像副本用於繪製
-            bev_with_projections = self.bev_image.copy()
-            
-            # 將左視角偵測結果投影到BEV
-            for detection in left_detections:
-                bev_pt = self.transform_rsv2bev(detection, self.homographys[0], self.affines[0])
-                if 0 <= bev_pt[0] < bev_with_projections.shape[1] and 0 <= bev_pt[1] < bev_with_projections.shape[0]:
-                    cv2.circle(bev_with_projections, bev_pt, 10, (0, 255, 0), -1)
-                    # cv2.putText(bev_with_projections, f"L{detection[2]:.2f}", 
-                    #             (bev_pt[0] + 15, bev_pt[1] - 15), 
-                    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-            # 將右視角偵測結果投影到BEV
-            for detection in right_detections:
-                bev_pt = self.transform_rsv2bev(detection, self.homographys[1], self.affines[1])
-                if 0 <= bev_pt[0] < bev_with_projections.shape[1] and 0 <= bev_pt[1] < bev_with_projections.shape[0]:
-                    cv2.circle(bev_with_projections, bev_pt, 10, (255, 0, 0), -1)
-                    # cv2.putText(bev_with_projections, f"R{detection[2]:.2f}", 
-                    #             (bev_pt[0] + 15, bev_pt[1] + 30), 
-                    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-            
-            time_end = rospy.Time.now()
-
-            # 在左上角寫入影像編號
-            cv2.putText(left_with_detection, f"Frame: {left_idx}", 
-                        (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
-            cv2.putText(right_with_detection, f"Frame: {right_idx}", 
-                        (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
-            
-            
-
-            # 根據模式輸出
-            if self.save_to_video:
-                self.save_frame_to_video(left_with_detection, right_with_detection, bev_with_projections)
-                processed_frames += 1
-
-                # if processed_frames % 50 == 0:  # 每50幀顯示一次進度
-                #     progress = (processed_frames / total_frames) * 100
-                    # rospy.loginfo(f"影片處理進度: {processed_frames}/{total_frames} ({progress:.1f}%)")
-                
-                pbar.update(1)
-                # 如果處理完所有影像就結束
-                if processed_frames >= total_frames:
-                    rospy.loginfo("所有影像處理完成，正在結束...")
-                    pbar.close()
-                    # 關閉影片寫入器
-                    self.video_writer.release()
-                    rospy.loginfo(f"影片已儲存至: {self.output_video_path}")
-                    self.is_running = False
-                    break
-                
-            else:
-                self.publish_images(left_with_detection, right_with_detection, bev_with_projections)
-
-
-            
-            # 更新影像索引
-            self.frame_index += 1
-                
-
-
-                # rate.sleep()
-                
-            # except Exception as e:
-            #     rospy.logerr(f"影像處理錯誤: {str(e)}")
-            #     rate.sleep()
-    
-    def publish_images(self, left_img, right_img, bev_img):
-        """發布影像到ROS topic"""
-        try:
-            timestamp = rospy.Time.now()
-            
-            # 建立Header
-            header = Header()
-            header.stamp = timestamp
-            header.frame_id = "camera"
-            
-            # 轉換並發布左視角影像
-            left_msg = self.bridge.cv2_to_imgmsg(left_img, "bgr8")
-            left_msg.header = header
-            self.left_pub.publish(left_msg)
-            
-            # 轉換並發布右視角影像
-            right_msg = self.bridge.cv2_to_imgmsg(right_img, "bgr8")
-            right_msg.header = header
-            self.right_pub.publish(right_msg)
-            
-            # 轉換並發布BEV影像
-            bev_msg = self.bridge.cv2_to_imgmsg(bev_img, "bgr8")
-            bev_msg.header = header
-            self.bev_pub.publish(bev_msg)
-            
-        except Exception as e:
-            rospy.logerr(f"影像發布錯誤: {str(e)}")
-    
-    def shutdown(self):
-        """關閉節點"""
-        rospy.loginfo("正在關閉BEV投影節點...")
-        self.is_running = False
-
-        if hasattr(self, 'processing_thread'):
-            self.processing_thread.join(timeout=2.0)
-        rospy.loginfo("BEV投影節點已關閉")
-
-def main():
-    try:
-        node = BEVProjectionNode()
-        rospy.on_shutdown(node.shutdown)
-        rospy.spin()
-    except rospy.ROSInterruptException:
-        pass
-    except Exception as e:
-        rospy.logerr(f"節點啟動失敗: {str(e)}")
-
-if __name__ == '__main__':
-    main()
+        
+        # 發布 BEV 結果
+        bev_msg = self.bridge.cv2_to_imgmsg(bev_result, "bgr8")
+        bev_msg.header.stamp = rospy.Time.now()
+        self.bev_pub.publish(bev_msg)

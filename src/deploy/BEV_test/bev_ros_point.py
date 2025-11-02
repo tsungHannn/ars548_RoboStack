@@ -90,23 +90,23 @@ class BEVIntegrationNode:
         """接收 RSU1 的偵測結果"""
         # 這裡假設偵測結果已經包含在影像中
         # 實際應用中可能需要自定義訊息格式來傳遞偵測座標
-        
-        boxes = np.array(msg_boxes.data).reshape(-1, 4).tolist() if len(msg_boxes.data) > 0 else []
+
+        boxes_speed = np.array(msg_boxes.data).reshape(-1, 5).tolist() if len(msg_boxes.data) > 0 else []
         ids = np.array(msg_ids.data).tolist() if len(msg_ids.data) > 0 else []
         class_ids = np.array(msg_class_ids.data).tolist() if len(msg_class_ids.data) > 0 else []
         points_2d = np.array(msg_points_2d.data).reshape(-1, 2).tolist() if len(msg_points_2d.data) > 0 else []
 
-        self.rsu1_detections = [boxes, ids, class_ids, points_2d]
+        self.rsu1_detections = [boxes_speed, ids, class_ids, points_2d]
     
     def rsu2_callback(self, msg_boxes, msg_ids, msg_class_ids, msg_points_2d):
         """接收 RSU2 的偵測結果"""
-        boxes = np.array(msg_boxes.data).reshape(-1, 4).tolist() if len(msg_boxes.data) > 0 else []
+        boxes_speed = np.array(msg_boxes.data).reshape(-1, 5).tolist() if len(msg_boxes.data) > 0 else []
         ids = np.array(msg_ids.data).tolist() if len(msg_ids.data) > 0 else []
         class_ids = np.array(msg_class_ids.data).tolist() if len(msg_class_ids.data) > 0 else []
         points_2d = np.array(msg_points_2d.data).reshape(-1, 2).tolist() if len(msg_points_2d.data) > 0 else []
         # points_3d = np.array(msg_points_3d.data).reshape(-1, 3).tolist() if len(msg_points_3d.data) > 0 else []
 
-        self.rsu2_detections = [boxes, ids, class_ids, points_2d]
+        self.rsu2_detections = [boxes_speed, ids, class_ids, points_2d]
     
     def compute_overlap_region(self):
         """通過密集採樣來計算兩個RSU在BEV空間的重疊區域"""
@@ -212,7 +212,7 @@ class BEVIntegrationNode:
         for det in detections:
             # det 格式: [x, y] 在原始影像中的座標
             pt = np.array([det[0], det[1], 1.0])
-            
+            speed = det[2]  # 速度資訊
             # 應用單應性變換
             pt_h = self.homographys[homography_idx] @ pt
             pt_h[0] = pt_h[0] / pt_h[2]
@@ -221,7 +221,7 @@ class BEVIntegrationNode:
             
             # 應用仿射變換
             pt_bev = self.affines[homography_idx] @ pt_h
-            bev_points.append([int(pt_bev[0]), int(pt_bev[1])])
+            bev_points.append([int(pt_bev[0]), int(pt_bev[1]), float(speed)])
         
         return bev_points
     
@@ -243,8 +243,8 @@ class BEVIntegrationNode:
 
         detections1 = []
         detections2 = []
-        for i, box in enumerate(boxes1):
-            x_center, y_center, width, height = box        
+        for i, box_speed in enumerate(boxes1):
+            x_center, y_center, width, height, speed = box_speed        
             # 還原到原始影像座標
             x_center_orig = x_center * self.scale_factor
             y_center_orig = y_center * self.scale_factor            
@@ -255,10 +255,10 @@ class BEVIntegrationNode:
             # y2 = int(y_center + height / 2)
             
             # 將中心點座標加入偵測結果
-            detections1.append([int(x_center_orig), int(y_center_orig)])
+            detections1.append([int(x_center_orig), int(y_center_orig), float(speed)])
         
-        for i, box in enumerate(boxes2):
-            x_center, y_center, width, height = box            
+        for i, box_speed in enumerate(boxes2):
+            x_center, y_center, width, height, speed = box_speed            
             # 還原到原始影像座標
             x_center_orig = x_center * self.scale_factor
             y_center_orig = y_center * self.scale_factor            
@@ -269,18 +269,19 @@ class BEVIntegrationNode:
             # y2 = int(y_center + height / 2)
             
             # 將中心點座標加入偵測結果
-            detections2.append([int(x_center_orig), int(y_center_orig)])
+            detections2.append([int(x_center_orig), int(y_center_orig), float(speed)])
 
         if len(self.rsu1_detections) > 0:
             bev_pts_1 = self.transform_to_bev(detections1, homography_idx=0)
             for pt, id in zip(bev_pts_1, self.rsu1_detections[2]):
                 if 0 <= pt[0] < bev_result.shape[1] and 0 <= pt[1] < bev_result.shape[0]:
 
-                    cv2.circle(bev_result, tuple(pt), 10, (0, 255, 0), -1)  # 綠色表示 RSU1
+                    cv2.circle(bev_result, (pt[0], pt[1]), 10, (0, 255, 0), -1)  # 綠色表示 RSU1
                     # 車輛資訊
                     class_name = class_names.get(id, 'unknown')
                     cv2.putText(bev_result, f"Class:{class_name}", (pt[0]+10, pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(bev_result, f"Vol: 30 km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    if pt[2] > 0:
+                        cv2.putText(bev_result, f"Vol: {pt[2] * 3.6:.2f} km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         # 處理RSU2的偵測結果 (只顯示非重疊區域的車輛)
         if len(self.rsu2_detections) > 0:
@@ -298,11 +299,12 @@ class BEVIntegrationNode:
                     # # 在重疊區域內則跳過,不顯示RSU2的結果
 
 
-                    cv2.circle(bev_result, tuple(pt), 10, (255, 0, 0), -1)  # 藍色表示 RSU2
+                    cv2.circle(bev_result, (pt[0], pt[1]), 10, (255, 0, 0), -1)  # 藍色表示 RSU2
                     # 車輛資訊
                     class_name = class_names.get(id, 'unknown')
                     cv2.putText(bev_result, f"Class:{class_name}", (pt[0]+10, pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                    cv2.putText(bev_result, f"Vol: 30 km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    if pt[2] > 0:
+                        cv2.putText(bev_result, f"Vol: {pt[2] * 3.6:.2f} km/h", (pt[0]+10, pt[1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
 
         

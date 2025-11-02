@@ -1609,11 +1609,15 @@ class TrafficMonitor():
         # 整合偵測結果至BEV
         # 發布 boxes
         boxes_array = []
-        for box, box_id, cls_id in zip(boxes, ids, class_ids):
-            x, y, w, h = box
-            # x, y = int(x - w / 2), int(y - h / 2)
-            boxes_array.append([x, y, w, h])
-            
+        # for box, box_id, cls_id in zip(boxes, ids, class_ids):
+        #     x, y, w, h = box
+        #     # x, y = int(x - w / 2), int(y - h / 2)
+        #     boxes_array.append([x, y, w, h])
+
+        for obj in objects:
+            cx, cy, w, h = obj.box
+            speed = obj.speed if obj.speed is not None else -1
+            boxes_array.append([cx, cy, w, h, speed])
 
         if len(boxes_array) > 0:
             boxes_msg = Float32MultiArray()
@@ -1658,6 +1662,154 @@ class TrafficMonitor():
         # 專題生可以改這邊
         # ======================================================
         # 碰撞檢測 -> 有車輛距離、速度之後，計算TTR(Time-to-Reach)，如果小於一個閥值就觸發警報
+
+
+
+        # ==== AEB：Pairwise（任兩車）— TCPA / DCPA 版本（僅用相對位置與速度） ====
+        # 門檻參數可按你的場域微調（路側監控建議從保守值開始）
+        TCPA_THRESH     = 3   # s  最近接近時間門檻（3 秒內） Time to Closest Point of Approach
+        DCPA_GATE       = 2.5   # m  最近距離門檻（~兩車寬 + margin）   Distance at Closest Point of Approach
+        MIN_REL_SPEED   = 1.0   # m/s 忽略幾乎同速或抖動
+        MAX_PAIR_DIST   = 100.0 # m  僅檢查較近的對象
+        AEB_DEBUG       = True
+
+        if AEB_DEBUG:
+            # 收集具有雷達資訊的目標（x, y, vx, vy）
+            cands = []
+            for obj in objects:
+                if obj.p3 is None or len(obj.p3) < 5:
+                    continue
+                x, y, _, vx, vy = obj.p3[:5]
+                if float(np.hypot(x, y)) > MAX_PAIR_DIST:
+                    continue
+                cands.append((
+                    obj,
+                    np.array([float(x),  float(y)],  dtype=np.float32),   # r  位置 (m)
+                    np.array([float(vx), float(vy)], dtype=np.float32)    # v  速度 (m/s)
+                ))
+
+            def _draw_banner(frame):
+                banner = "AEB WARNING (TCPA/DCPA)!"
+                H, W = frame.shape[:2]
+                (bw, bh), _ = cv2.getTextSize(banner, cv2.FONT_HERSHEY_SIMPLEX, 1.4, 3)
+                cv2.rectangle(frame, (0, 0), (W, bh + 28), (0, 0, 255), -1)
+                cv2.putText(frame, banner, (max(10, (W - bw) // 2), bh + 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3, cv2.LINE_AA)
+
+            def _draw_pair(frame, ob, tcpa_val, dcpa_val):
+                cx, cy, w, h = ob.box
+                x1, y1 = int(cx - w / 2), int(cy - h / 2)
+                x2, y2 = int(cx + w / 2), int(cy + h / 2)
+                
+                
+                label = f"TCPA:{tcpa_val:.1f}s  DCPA:{dcpa_val:.1f}m"
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+
+                # 根據是否危險改變顏色
+                if tcpa_val < 1.0 and dcpa_val < 1.0:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 6)
+                    cv2.rectangle(frame, (x1, max(0, y1 - th - 10)), (x1 + tw + 8, y1), (0, 0, 255), -1)
+                    cv2.putText(frame, label, (x1 + 4, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+                else:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 136, 255), 6)
+                    cv2.rectangle(frame, (x1, max(0, y1 - th - 10)), (x1 + tw + 8, y1), (0, 136, 255), -1)
+                    cv2.putText(frame, label, (x1 + 4, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+
+            trigger_pairs = []
+            best_tcpa  = float('inf')
+
+            n = len(cands)
+            for i in range(n):
+                oi, ri, vi = cands[i]
+                for j in range(i + 1, n):
+                    oj, rj, vj = cands[j]
+
+                    # 相對位置/速度
+                    r_rel = rj - ri                     # [x_rel, y_rel]
+                    v_rel = vj - vi                     # [vx_rel, vy_rel]
+
+                    # (1) 速度過小：忽略
+                    vrel2 = float(np.dot(v_rel, v_rel))
+                    if vrel2 < (MIN_REL_SPEED ** 2):
+                        continue
+
+
+                    # (2) 最近接近時間 TCPA = - (r·v) / ||v||^2
+                    closing = float(np.dot(r_rel, v_rel))  # 注意號號：用公式統一處理
+                    tcpa = - closing / vrel2
+
+                    # 只關注未來且不太遠的最近接近
+                    if not (0.0 < tcpa <= TCPA_THRESH):
+                        continue
+
+                    # (3) 最近距離 DCPA = || r + v * TCPA ||
+                    dcpa_vec = r_rel + v_rel * tcpa
+                    dcpa = float(np.linalg.norm(dcpa_vec))
+                    if dcpa > DCPA_GATE:
+                        continue
+
+                    # 因為目前場景都沒有真的撞，所以算出來的DCPA基本上都是橫向距離
+
+                    # # (4) 【新增】計算橫向距離（垂直於相對速度方向的分量）
+                    # # 將相對速度正規化為單位向量
+                    # v_rel_norm = v_rel / np.sqrt(vrel2)
+                    
+                    # # 計算 DCPA 時刻的位置在相對速度方向的投影
+                    # # 橫向距離 = DCPA向量在垂直於速度方向的分量
+                    # longitudinal = float(np.dot(dcpa_vec, v_rel_norm))  # 縱向距離（沿速度方向）
+                    # lateral_distance = np.sqrt(max(0, dcpa**2 - longitudinal**2))  # 橫向距離
+                    
+                    # # 如果橫向距離大於門檻，表示兩車只是擦身而過，不會真正碰撞
+                    # # class_names = {0: 'object',
+                    # #            1: 'bus',
+                    # #            2: 'car',
+                    # #            3: 'motorcycle',
+                    # #            4: 'truck'}
+
+                    # if oi.class_id == 3 or oj.class_id == 3:  # 摩托車
+                    #     if lateral_distance > LATERAL_THRESH_MOTOR:
+                    #         rospy.loginfo_throttle(2.0, 
+                    #             "AEB: 橫向距離足夠 (%.2fm)，判定為擦身而過 - ID %d & %d",
+                    #             lateral_distance, oi.id, oj.id)
+                    #         continue
+                    # else:  # 汽車及其他
+                    #     if lateral_distance > LATERAL_THRESH_CAR:
+                    #         rospy.loginfo_throttle(2.0, 
+                    #             "AEB: 橫向距離足夠 (%.2fm)，判定為擦身而過 - ID %d & %d",
+                    #             lateral_distance, oi.id, oj.id)
+                    #         continue
+
+                    # 命中：視覺化兩台車、連線與標籤
+                    # trigger_pairs.append((oi, oj, tcpa, dcpa))
+                    # best_tcpa = min(best_tcpa, tcpa)
+                    _draw_pair(fusion_frame, oi, tcpa, dcpa)
+                    _draw_pair(fusion_frame, oj, tcpa, dcpa)
+                    p1 = (int(oi.box[0]), int(oi.box[1]))
+                    p2 = (int(oj.box[0]), int(oj.box[1]))
+                    if tcpa < 1.0 and dcpa < 1.0:
+                        cv2.line(fusion_frame, p1, p2, (0, 0, 255), 3)
+                    else:
+                        cv2.line(fusion_frame, p1, p2, (0, 136, 255), 3)
+                    print("AEB Triggered: TCPA=%.2fs, DCPA=%.2fm" % (tcpa, dcpa))
+                    print("前車ID:", oi.id, "位置:", oi.p3[:3], "速度:", oi.p3[3:5])
+                    print("後車ID:", oj.id, "位置:", oj.p3[:3], "速度:", oj.p3[3:5])
+                    print("相對位置:", r_rel)
+                    print("相對速度:", v_rel)
+                    # print("TCPA時橫向距離: %.2fm" % lateral_distance)
+
+            # 橫幅 + log
+            if trigger_pairs:
+                _draw_banner(fusion_frame)
+                # rospy.logwarn_throttle(0.5, "AEB TCPA/DCPA TRIGGERED: pairs=%d, best_tcpa=%.2fs",
+                #                     len(trigger_pairs), best_tcpa)
+            # else:
+                # if AEB_DEBUG:
+                #     rospy.loginfo_throttle(1.0, "AEB TCPA/DCPA: candidates=%d, pairs=0 (no risk)", len(cands))
+
+
+
 
 
 

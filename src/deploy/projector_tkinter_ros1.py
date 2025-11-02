@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import json
 import numpy as np
 import sys
@@ -16,6 +13,10 @@ from tkinter.scrolledtext import ScrolledText
 
 import rospy
 from std_msgs.msg import Float32MultiArray, String
+
+
+from BEV_test.rsv_to_bev import rsv_to_bev
+from BEV_test.bev_stitcher import bev_stitcher
 
 class ROSNode:
     """分離的 ROS 節點類別"""
@@ -318,6 +319,8 @@ class ProjectorGUI:
         ttk.Button(action_frame, text="Reset Calibration", command=self.reset_calibration).pack(fill=tk.X, pady=2)
         ttk.Button(action_frame, text="Save Calibration", command=self.save_calibration).pack(fill=tk.X, pady=2)
         
+        ttk.Button(action_frame, text="RSV to BEV", command=self.open_rsv_to_bev).pack(fill=tk.X, pady=2)
+        ttk.Button(action_frame, text="BEV Stitcher", command=self.open_bev_stitcher).pack(fill=tk.X, pady=2)
         # ======================
         # Extrinsic Matrix (compact)
         # ======================
@@ -593,6 +596,37 @@ class ProjectorGUI:
             
             messagebox.showinfo("儲存成功", f"校正已儲存至 {file_path}")
             print(f"Calibration saved to {file_path}")
+
+
+    def open_rsv_to_bev(self):
+        """執行 RSV to BEV 轉換程式"""
+        try:
+            # rsv_bev_thread = threading.Thread(target=rsv_to_bev)
+            # rsv_bev_thread.daemon = True  # 設為 daemon，主程式結束時自動結束
+            # rsv_bev_thread.start()
+
+            rsv_to_bev()
+            print("已啟動 RSV to BEV 轉換工具")
+            
+        except Exception as e:
+            messagebox.showerror("錯誤", f"無法啟動 RSV to BEV 工具：{str(e)}")
+            print(f"啟動 RSV to BEV 工具時發生錯誤: {e}")
+
+    def open_bev_stitcher(self):
+        """執行 RSV to BEV 轉換程式"""
+        try:
+            # rsv_bev_thread = threading.Thread(target=rsv_to_bev)
+            # rsv_bev_thread.daemon = True  # 設為 daemon，主程式結束時自動結束
+            # rsv_bev_thread.start()
+
+            bev_stitcher()
+            print("已啟動 BEV Stitcher 轉換工具")
+            
+        except Exception as e:
+            messagebox.showerror("錯誤", f"無法啟動 BEV Stitcher 工具：{str(e)}")
+            print(f"啟動 BEV Stitcher 工具時發生錯誤: {e}")
+
+
     
     def run(self):
         """Start the GUI main loop"""
